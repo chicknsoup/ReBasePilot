@@ -1,4 +1,9 @@
-'''Players page — multi-run account list.'''
+# Decompiled with PyLingual (https://pylingual.io)
+# Internal filename: 'app\\ui\\qt\\pages\\players.py'
+# Bytecode version: 3.13.0rc3 (3571)
+# Source timestamp: 1970-01-01 00:00:00 UTC (0)
+
+"""Players page — multi-run account list."""
 from __future__ import annotations
 from typing import List, Optional
 from PySide6.QtCore import Qt
@@ -6,10 +11,8 @@ from PySide6.QtWidgets import QHBoxLayout, QLineEdit, QScrollArea, QVBoxLayout, 
 from app.ui.qt.theme import SPACING, TOKENS
 from app.ui.qt.widgets import PageTitle, chip_button, danger_button, neutral_button, primary_button
 from app.utils.player_list_store import PlayerEntry, load_players, save_players
-
 class _PlayerRow(QWidget):
-    
-    def __init__(self, entry, on_change, on_move_up, on_move_down, on_remove, parent = None):
+    def __init__(self, entry, on_change, on_move_up, on_move_down, on_remove, parent=None):
         super().__init__(parent)
         self._on_change = on_change
         layout = QHBoxLayout(self)
@@ -18,28 +21,24 @@ class _PlayerRow(QWidget):
         self._name.setPlaceholderText('Username (match in-game)')
         self._name.setMinimumWidth(240)
         self._name.editingFinished.connect(on_change)
-        layout.addWidget(self._name, stretch = 1)
+        layout.addWidget(self._name, stretch=1)
         self._enabled = entry.enabled
-        self._mode_btn = primary_button('Run', parent = self) if entry.enabled else danger_button('Skip', parent = self)
+        self._mode_btn = primary_button('Run', parent=self) if entry.enabled else danger_button('Skip', parent=self)
         self._mode_btn.clicked.connect(self._toggle_mode)
         layout.addWidget(self._mode_btn)
-        up = chip_button('▲', parent = self)
+        up = chip_button('▲', parent=self)
         up.clicked.connect(on_move_up)
         layout.addWidget(up)
-        down = chip_button('▼', parent = self)
+        down = chip_button('▼', parent=self)
         down.clicked.connect(on_move_down)
         layout.addWidget(down)
-        remove = danger_button('Remove', parent = self)
+        remove = danger_button('Remove', parent=self)
         remove.clicked.connect(on_remove)
         layout.addWidget(remove)
-
-    
     def _toggle_mode(self):
         self._enabled = not (self._enabled)
         self._refresh_mode_button()
         self._on_change()
-
-    
     def _refresh_mode_button(self):
         old = self._mode_btn
         layout = self.layout()
@@ -49,18 +48,12 @@ class _PlayerRow(QWidget):
         self._mode_btn = primary_button('Run', parent = self) if self._enabled else danger_button('Skip', parent = self)
         self._mode_btn.clicked.connect(self._toggle_mode)
         layout.insertWidget(idx, self._mode_btn)
-
-    
     def to_entry(self):
         name = self._name.text().strip()
         if not name:
             return None
         return PlayerEntry(name = name, enabled = self._enabled)
-
-
-
 class PlayersPage(QWidget):
-    
     def __init__(self, parent = None):
         super().__init__(parent)
         self._rows = []
@@ -89,13 +82,9 @@ class PlayersPage(QWidget):
         add_btn = neutral_button('Add player')
         add_btn.clicked.connect((lambda : self._add_row(PlayerEntry(name = '', enabled = True))))
         outer.addWidget(add_btn)
-
-    
     def showEvent(self, event):
         super().showEvent(event)
         self._reload()
-
-    
     def _reload(self):
         while self._rows:
             row = self._rows.pop()
@@ -105,24 +94,17 @@ class PlayersPage(QWidget):
         for entry in load_players():
             self._insert_row(entry, stretch_idx)
             stretch_idx += 1
-
-    
     def _insert_row(self, entry, before_stretch):
         row_holder = [
             None]
-        
         def move_up():
             if not row_holder[0] is None:
                 self._move_row(row_holder[0], -1)
                 return None
-
-        
         def move_down():
             if not row_holder[0] is None:
                 self._move_row(row_holder[0], 1)
                 return None
-
-        
         def remove():
             if not row_holder[0] is None:
                 self._remove_row(row_holder[0])
@@ -132,38 +114,28 @@ class PlayersPage(QWidget):
         row_holder[0] = row
         self._rows.append(row)
         self._list_layout.insertWidget(before_stretch, row)
-
-    
     def _add_row(self, entry):
         stretch_idx = max(0, self._list_layout.count() - 1)
         self._insert_row(entry, stretch_idx)
         self._save()
-
-    
     def _row_index(self, row):
         return self._rows.index(row)
-
-    
     def _move_row(self, row, delta):
         idx = self._row_index(row)
         new_idx = idx + delta
         if new_idx < 0 or new_idx >= len(self._rows):
             return None
-        self._rows[idx] = self._rows[new_idx]
-        self._rows[new_idx] = self._rows[idx]
-        self._list_layout.removeWidget(row)
-        self._list_layout.insertWidget(new_idx, row)
-        self._save()
-
-    
+        else:
+            self._rows[idx], self._rows[new_idx] = (self._rows[new_idx], self._rows[idx])
+            self._list_layout.removeWidget(row)
+            self._list_layout.insertWidget(new_idx, row)
+            self._save()
     def _remove_row(self, row):
         if row in self._rows:
             self._rows.remove(row)
         self._list_layout.removeWidget(row)
         row.deleteLater()
         self._save()
-
-    
     def _save(self):
         players = []
         for row in self._rows:
@@ -172,5 +144,3 @@ class PlayersPage(QWidget):
                 continue
             players.append(entry)
         save_players(players)
-
-

@@ -1,3 +1,8 @@
+# Decompiled with PyLingual (https://pylingual.io)
+# Internal filename: 'app\\services\\vision.py'
+# Bytecode version: 3.13.0rc3 (3571)
+# Source timestamp: 1970-01-01 00:00:00 UTC (0)
+
 import difflib
 import math
 import re
@@ -10,114 +15,62 @@ from typing import Any, Dict, Optional, Tuple, List, Sequence
 from app.config import ASPECT_BASELINE, ASPECT_16_10, ASPECT_16_9, Config, resolve_aspect_key
 from app.utils.common import ensure_dir, get_resource_path, get_template_path
 from app.utils.logger import setup_logger
-
 try:
     import pytesseract
     logger = setup_logger('VisionService')
-    
-    @dataclass(frozen = True)
+    @dataclass(frozen=True)
     class OcrWordBox:
-        '''A single word bounding box in **screen** coordinates (matches `screen_img`).'''
-        # [recovered from bytecode: decompiler collapsed these fields into the docstring]
+        """A single word bounding box in **screen** coordinates (matches `screen_img`)."""
         left: int
         top: int
         width: int
         height: int
         text: str
         confidence: float
-
         @property
         def center(self):
             return (self.left + self.width // 2, self.top + self.height // 2)
-
-
-    _NUMBERS_HUD_ROI_AT_BASELINE: Dict[str, Tuple[int, int]] = {
-        ASPECT_16_9: (550, 350),
-        ASPECT_16_10: (600, 400) }
-    _MULTIUPGRADE_COST_REDNESS_ABOVE_AT_BASELINE: Dict[str, Tuple[int, int, int]] = {
-        ASPECT_16_10: (49, 80, 24),
-        ASPECT_16_9: (43, 80, 18) }
+    _NUMBERS_HUD_ROI_AT_BASELINE: Dict[str, Tuple[int, int]] = {ASPECT_16_9: (550, 350), ASPECT_16_10: (600, 400)}
+    _MULTIUPGRADE_COST_REDNESS_ABOVE_AT_BASELINE: Dict[str, Tuple[int, int, int]] = {ASPECT_16_10: (49, 80, 24), ASPECT_16_9: (43, 80, 18)}
     _NUMBERS_REF_LINE_HEIGHT_PX = 30
+    _NUMBER_RUN_GAP_WIDTHS = 2.0
     HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE = 3
-    
-    @dataclass(frozen = True)
+    @dataclass(frozen=True)
     class GroupedNumber:
-        '''Merged numeric string on one text line (see :meth:`VisionService.extract_grouped_numbers_in_region`).'''
-        # [recovered from bytecode: decompiler collapsed these fields into the docstring]
+        """Merged numeric string on one text line (see :meth:`VisionService.extract_grouped_numbers_in_region`)."""
         text: str
         left: int
         top: int
         width: int
         height: int
         confidence: float
-
         @property
         def center(self):
             return (self.left + self.width // 2, self.top + self.height // 2)
-
-
-    
-    @dataclass(frozen = True)
+    @dataclass(frozen=True)
     class UpgradeCostIconRedness:
-        '''Gold or elixir slot from ``multiupgrade.png`` + redness in the cost box above it.'''
-        # [recovered + verified against original bytecode: field names from disassembly]
+        """Gold or elixir slot from ``multiupgrade.png`` + redness in the cost box above it."""
         template: str
         found: bool
         match_confidence: float
         redness: float
         cost_roi_xywh: Optional[Tuple[int, int, int, int]]
         center: Optional[Tuple[int, int]] = None
-
-    
-    @dataclass(frozen = True)
+    @dataclass(frozen=True)
     class UpgradeCostRednessPair:
-        '''See :meth:`VisionService.upgrade_cost_redness_by_resource_icons`.'''
-        # [recovered from bytecode: decompiler collapsed these fields into the docstring]
+        """See :meth:`VisionService.upgrade_cost_redness_by_resource_icons`."""
         gold: UpgradeCostIconRedness
         elixir: UpgradeCostIconRedness
-
-    BOTTOM_HALF_BOT_TEMPLATES = frozenset({
-        'bstar.png',
-        'attack.png',
-        'bbstar.png',
-        'addwall.png',
-        'attack2.png',
-        'findnow.png',
-        'settings.png',
-        'endbattle.png',
-        'surrender.png',
-        'babydragon.png',
-        'farmbattle.png',
-        'removewall.png',
-        'addwallfake.png',
-        'upgrademore.png',
-        'rankedbattle.png',
-        'battlemachine.png',
-        'flyingmachine.png',
-        'removewallfake.png',
-        'rankedattackconfirm.png'})
-    TOP_HALF_BOT_TEMPLATES = frozenset({
-        'builder.png',
-        'gbuilder.png',
-        'mbuilder.png',
-        'fullecart.png',
-        'fullecart2.png',
-        'fullecart3.png'})
+    BOTTOM_HALF_BOT_TEMPLATES = frozenset({'removewallfake.png', 'endbattle.png', 'addwallfake.png', 'farmbattle.png', 'battlemachine.png', 'addwall.png', 'attack.png', 'rankedbattle.png', 'surrender.png', 'findnow.png', 'attack2.png', 'babydragon.png', 'settings.png', 'removewall.png', 'rankedattackconfirm.png', 'bstar.png', 'bbstar.png', 'upgrademore.png', 'flyingmachine.png'})
+    TOP_HALF_BOT_TEMPLATES = frozenset({'builder.png', 'fullecart2.png', 'gbuilder.png', 'fullecart.png', 'mbuilder.png', 'fullecart3.png'})
     _WHITE_TEXT_BRIGHTNESS_FLOOR = 190
-    _CC_INK_AREA_AT_BASELINE: Dict[str, Tuple[int, int]] = {
-        ASPECT_16_9: (80, 500),
-        ASPECT_16_10: (100, 600) }
-    _TOP_CENTER_MENU_SQUARE_SIDE_AT_BASELINE: Dict[str, int] = {
-        ASPECT_16_9: 1000,
-        ASPECT_16_10: 1000 }
-    _WALL_MENU_LETTER_CC_AT_BASELINE: Dict[str, Tuple[int, int]] = {
-        ASPECT_16_9: (30, 350),
-        ASPECT_16_10: (40, 400) }
-    
+    _CC_INK_AREA_AT_BASELINE: Dict[str, Tuple[int, int]] = {ASPECT_16_9: (80, 500), ASPECT_16_10: (100, 600)}
+    _TOP_CENTER_MENU_SQUARE_SIDE_AT_BASELINE: Dict[str, int] = {ASPECT_16_9: 1000, ASPECT_16_10: 1000}
+    _WALL_MENU_LETTER_CC_AT_BASELINE: Dict[str, Tuple[int, int]] = {ASPECT_16_9: (30, 350), ASPECT_16_10: (40, 400)}
     class VisionService:
-        '''Handles image recognition and processing.'''
+        """Handles image recognition and processing."""
         _tesseract_missing_logged: bool = False
-        
+        _stop_event: Optional[Any] = None
         @staticmethod
         def _log_tesseract_missing():
             '''Log the Tesseract-not-found error once (subsequent OCR calls stay silent).'''
@@ -125,16 +78,14 @@ try:
                 return None
             VisionService._tesseract_missing_logged = True
             logger.error('Tesseract executable not found; OCR is disabled and all word/number reads will return empty. Install Tesseract and ensure it is on PATH or bundled (e.g. Windows installer from UB Mannheim). This is logged once per run.')
-
-        
         @staticmethod
         def _template_scale_xy(screen_img):
             '''Scale from authored ref (:attr:`Config.ref_width` / ``ref_height``) to screenshot size.'''
             (h, w) = screen_img.shape[:2]
             cfg = Config()
             return (w / cfg.ref_width, h / cfg.ref_height)
-
-        
+        _MULTISCALE_WALL_TEMPLATES = frozenset({'upgrademore.png', 'multiupgrade.png'})
+        _WALL_TEMPLATE_SCALE_FACTORS = (1.0, 0.90, 0.85)
         @staticmethod
         def _resize_template_for_screen(template, screen_img):
             '''Resize reference PNG templates to match the current capture.'''
@@ -146,32 +97,48 @@ try:
             new_h = max(1, int(round(t_h * sy)))
             interp = cv2.INTER_AREA if min(sx, sy) < 1 else cv2.INTER_CUBIC
             return cv2.resize(template, (new_w, new_h), interpolation = interp)
-
-        
+        @staticmethod
+        def _best_scaled_template(template, screen_img, search_img, template_name = ''):
+            '''Return the resized template (at the best matching scale factor for bottom-bar wall templates when Buildings & Heroes is open).'''
+            if template_name not in VisionService._MULTISCALE_WALL_TEMPLATES:
+                return VisionService._resize_template_for_screen(template, screen_img)
+            (sx, sy) = VisionService._template_scale_xy(screen_img)
+            (t_h, t_w) = template.shape[:2]
+            (s_h, s_w) = search_img.shape[:2]
+            best_tpl = None
+            best_score = -2.0
+            for factor in VisionService._WALL_TEMPLATE_SCALE_FACTORS:
+                new_w = max(1, int(round(t_w * sx * factor)))
+                new_h = max(1, int(round(t_h * sy * factor)))
+                if new_w > s_w or new_h > s_h:
+                    continue
+                interp = cv2.INTER_AREA if min(sx * factor, sy * factor) < 1 else cv2.INTER_CUBIC
+                cand = cv2.resize(template, (new_w, new_h), interpolation = interp)
+                (_, val, _, _) = cv2.minMaxLoc(cv2.matchTemplate(search_img, cand, cv2.TM_CCOEFF_NORMED))
+                if float(val) > best_score:
+                    best_score = float(val)
+                    best_tpl = cand
+                    if best_score >= 0.80:
+                        break
+            return best_tpl if best_tpl is not None else VisionService._resize_template_for_screen(template, screen_img)
         @staticmethod
         def bottom_half_region(screen_img):
             '''ROI (x, y, w, h) covering the bottom half of the screenshot.'''
             (h, w) = screen_img.shape[:2]
             y0 = h // 2
             return (0, y0, w, h - y0)
-
-        
         @staticmethod
         def top_half_region(screen_img):
             '''ROI (x, y, w, h) covering the top half of the screenshot.'''
             (h, w) = screen_img.shape[:2]
             y1 = h // 2
             return (0, 0, w, y1)
-
-        
         @staticmethod
         def right_half_region(screen_img):
             '''ROI (x, y, w, h) covering the right half of the screenshot.'''
             (h, w) = screen_img.shape[:2]
             x0 = w // 2
             return (x0, 0, w - x0, h)
-
-        
         @staticmethod
         def top_right_quadrant_region(screen_img):
             '''ROI (x, y, w, h) covering the top-right quarter of the screenshot.'''
@@ -179,8 +146,6 @@ try:
             x0 = w // 2
             y1 = h // 2
             return (x0, 0, w - x0, y1)
-
-        
         @staticmethod
         def find_template(screen_img, template_name, threshold = 0.8, region = None, *, scale_template = True):
             '''
@@ -194,8 +159,6 @@ Returns (center_x, center_y) or (None, None).
                 if template is None:
                     logger.error(f'''Template not found: {template_path}''')
                     return (None, None)
-                if scale_template:
-                    template = VisionService._resize_template_for_screen(template, screen_img)
                 if region:
                     (x, y, w, h) = region
                     (h_screen, w_screen) = screen_img.shape[:2]
@@ -207,6 +170,8 @@ Returns (center_x, center_y) or (None, None).
                 else:
                     search_img = screen_img
                     (offset_x, offset_y) = (0, 0)
+                if scale_template:
+                    template = VisionService._best_scaled_template(template, screen_img, search_img, template_name)
                 (t_h, t_w) = template.shape[:2]
                 (s_h, s_w) = search_img.shape[:2]
                 if t_w > s_w or t_h > s_h:
@@ -226,9 +191,6 @@ Returns (center_x, center_y) or (None, None).
                 return (None, None)
                 e = None
                 del e
-
-
-        
         @staticmethod
         def find_template_with_confidence(screen_img, template_name, threshold = 0, region = None):
             '''
@@ -243,7 +205,6 @@ Returns (None, None, confidence) if not found above threshold.
                 if template is None:
                     logger.error(f'''Template not found: {template_path}''')
                     return (None, None, 0)
-                template = VisionService._resize_template_for_screen(template, screen_img)
                 if region:
                     (x, y, w, h) = region
                     (h_screen, w_screen) = screen_img.shape[:2]
@@ -254,6 +215,7 @@ Returns (None, None, confidence) if not found above threshold.
                 else:
                     search_img = screen_img
                     (offset_x, offset_y) = (0, 0)
+                template = VisionService._best_scaled_template(template, screen_img, search_img, template_name)
                 (t_h, t_w) = template.shape[:2]
                 (s_h, s_w) = search_img.shape[:2]
                 if t_w > s_w or t_h > s_h:
@@ -273,9 +235,6 @@ Returns (None, None, confidence) if not found above threshold.
                 return (None, None, 0)
                 e = None
                 del e
-
-
-        
         @staticmethod
         def find_all_template_centers(screen_img, template_name, threshold = 0.8, region = None, *, max_matches = 12, suppress_pad_frac = 0.5):
             '''All non-overlapping template hits as ``(center_x, center_y)`` centers.'''
@@ -286,8 +245,6 @@ Returns (None, None, confidence) if not found above threshold.
             tw = None
             top = None
             left = None
-
-        
         @staticmethod
         def _template_best_match(screen_img, template_name, region = None):
             '''Best ``TM_CCOEFF_NORMED`` score and match center ``(x, y)``, or ``(0.0, None, None)``.'''
@@ -298,7 +255,6 @@ Returns (None, None, confidence) if not found above threshold.
                 if template is None:
                     logger.error(f'''Template not found: {template_path}''')
                     return (0, None, None)
-                template = VisionService._resize_template_for_screen(template, screen_img)
                 if region:
                     (x, y, w, h) = region
                     (h_screen, w_screen) = screen_img.shape[:2]
@@ -309,6 +265,7 @@ Returns (None, None, confidence) if not found above threshold.
                 else:
                     search_img = screen_img
                     (offset_x, offset_y) = (0, 0)
+                template = VisionService._best_scaled_template(template, screen_img, search_img, template_name)
                 (t_h, t_w) = template.shape[:2]
                 (s_h, s_w) = search_img.shape[:2]
                 if t_w > s_w or t_h > s_h:
@@ -326,9 +283,6 @@ Returns (None, None, confidence) if not found above threshold.
                 return (0, None, None)
                 e = None
                 del e
-
-
-        
         @staticmethod
         def find_active_over_disabled_template(screen_img, active_template, disabled_template, region = None, threshold = 0.8):
             '''
@@ -365,8 +319,6 @@ Falls back to ``find_template`` when the disabled PNG is missing (e.g. 16:10 pac
             if not best_is_active or best_x is None or best_y is None:  # [recovered: decompiler dropped the `not` — a disabled control counted as active]
                 return (None, None)
             return (best_x, best_y)
-
-        
         @staticmethod
         def lime_fraction(bgr, *, hue_lo = 35, hue_hi = 90, sat_floor = 80, val_floor = 80):
             '''
@@ -383,10 +335,68 @@ and value at least ``sat_floor`` / ``val_floor``.
             if total > 0:
                 return float(cv2.countNonZero(mask)) / float(total)
             return 0
-
-        
         @staticmethod
-        def find_active_addwall(screen_img, region = None, *, template_threshold = 0.75, lime_threshold = 0.3, max_matches = 32):
+        def _find_colored_wall_centers(screen_img, template_name, color_fn, color_threshold, template_threshold, region = None, max_matches = 32):
+            '''Search across wall scale factors (1.0, 0.90, 0.85) and verify color inside the peak loop so non-colored button edges cannot exhaust max_matches.'''
+            if screen_img is None or getattr(screen_img, 'size', 0) == 0:
+                return []
+            try:
+                template_path = str(get_template_path(template_name))
+                template = cv2.imread(template_path)
+                if template is None:
+                    return []
+                (frame_h, frame_w) = screen_img.shape[:2]
+                if region:
+                    (rx, ry, rw, rh) = region
+                    if rx + rw > frame_w or ry + rh > frame_h or rw <= 0 or rh <= 0:
+                        return []
+                    search_img = screen_img[ry:ry + rh, rx:rx + rw]
+                    (offset_x, offset_y) = (rx, ry)
+                else:
+                    search_img = screen_img
+                    (offset_x, offset_y) = (0, 0)
+                (sx, sy) = VisionService._template_scale_xy(screen_img)
+                (t_h0, t_w0) = template.shape[:2]
+                (s_h, s_w) = search_img.shape[:2]
+                passing = []
+                for factor in VisionService._WALL_TEMPLATE_SCALE_FACTORS:
+                    t_w = max(1, int(round(t_w0 * sx * factor)))
+                    t_h = max(1, int(round(t_h0 * sy * factor)))
+                    if t_w > s_w or t_h > s_h:
+                        continue
+                    interp = cv2.INTER_AREA if min(sx * factor, sy * factor) < 1 else cv2.INTER_CUBIC
+                    cand = cv2.resize(template, (t_w, t_h), interpolation = interp)
+                    work = cv2.matchTemplate(search_img, cand, cv2.TM_CCOEFF_NORMED)
+                    pad_x = max(1, int(round(t_w * 0.5)))
+                    pad_y = max(1, int(round(t_h * 0.5)))
+                    found_for_scale = 0
+                    for _ in range(max(64, int(max_matches) * 4)):
+                        (_, max_val, _, max_loc) = cv2.minMaxLoc(work)
+                        if float(max_val) < template_threshold:
+                            break
+                        left = offset_x + int(max_loc[0])
+                        top = offset_y + int(max_loc[1])
+                        y0 = max(0, max_loc[1] - pad_y)
+                        y1 = min(work.shape[0], max_loc[1] + t_h + pad_y)
+                        x0 = max(0, max_loc[0] - pad_x)
+                        x1 = min(work.shape[1], max_loc[0] + t_w + pad_x)
+                        work[y0:y1, x0:x1] = -1.0
+                        cx0 = max(0, min(left, frame_w))
+                        cy0 = max(0, min(top, frame_h))
+                        cx1 = max(0, min(left + t_w, frame_w))
+                        cy1 = max(0, min(top + t_h, frame_h))
+                        crop = screen_img[cy0:cy1, cx0:cx1]
+                        if color_fn(crop) >= color_threshold:
+                            passing.append((left + t_w // 2, top + t_h // 2))
+                            found_for_scale += 1
+                            if found_for_scale >= max_matches:
+                                break
+                return passing
+            except Exception as e:
+                logger.error(f'Error in _find_colored_wall_centers ({template_name}): {e}')
+                return []
+        @staticmethod
+        def find_active_addwall(screen_img, region = None, *, template_threshold = 0.70, lime_threshold = 0.25, max_matches = 32):
             '''
 Locate an active (lime green) add-wall control via ``addwall.png`` template
 matching plus per-hit lime color verification.
@@ -394,25 +404,10 @@ matching plus per-hit lime color verification.
 Returns the **rightmost** center among hits that pass both ``template_threshold``
 and ``lime_threshold``, or ``(None, None)`` when none qualify.
 '''
-            matches = VisionService._find_template_matches(screen_img, 'addwall.png', template_threshold, region, max_matches = max_matches)
-            if not matches:
-                return (None, None)
-            (frame_h, frame_w) = screen_img.shape[:2]
-            passing = []
-            for left, top, tw, th, _score in matches:
-                x0 = max(0, min(int(left), frame_w))
-                y0 = max(0, min(int(top), frame_h))
-                x1 = max(0, min(int(left) + int(tw), frame_w))
-                y1 = max(0, min(int(top) + int(th), frame_h))
-                crop = screen_img[y0:y1, x0:x1]
-                if VisionService.lime_fraction(crop) < lime_threshold:
-                    continue
-                passing.append((int(left) + int(tw) // 2, int(top) + int(th) // 2))
+            passing = VisionService._find_colored_wall_centers(screen_img, 'addwall.png', VisionService.lime_fraction, lime_threshold, template_threshold, region = region, max_matches = max_matches)
             if not passing:
                 return (None, None)
             return max(passing, key = (lambda pt: pt[0]))
-
-        
         @staticmethod
         def yellow_fraction(bgr, *, hue_lo = 18, hue_hi = 40, sat_floor = 80, val_floor = 80):
             '''
@@ -429,8 +424,6 @@ at least ``sat_floor`` / ``val_floor``.
             if total > 0:
                 return float(cv2.countNonZero(mask)) / float(total)
             return 0
-
-        
         @staticmethod
         def pink_fraction(bgr, *, hue_lo = 130, hue_hi = 175, sat_floor = 80, val_floor = 80):
             '''
@@ -447,8 +440,6 @@ at least ``sat_floor`` / ``val_floor``.
             if total > 0:
                 return float(cv2.countNonZero(mask)) / float(total)
             return 0
-
-        
         @staticmethod
         def find_active_hgoldfull(screen_img, region = None, *, template_threshold = 0.85, yellow_threshold = 0.5, max_matches = 8):
             '''
@@ -470,8 +461,6 @@ plus per-hit yellow color verification.
                 sorted(matches, key = (lambda m: m[4]), reverse = True)
                 return (int(left) + int(tw) // 2, int(top) + int(th) // 2)
             return (None, None)
-
-        
         @staticmethod
         def find_active_helixirfull(screen_img, region = None, *, template_threshold = 0.85, pink_threshold = 0.5, max_matches = 8):
             '''
@@ -493,10 +482,8 @@ plus per-hit pink color verification.
                 sorted(matches, key = (lambda m: m[4]), reverse = True)
                 return (int(left) + int(tw) // 2, int(top) + int(th) // 2)
             return (None, None)
-
-        
         @staticmethod
-        def find_active_removewall(screen_img, region = None, *, template_threshold = 0.75, yellow_threshold = 0.3, max_matches = 32):
+        def find_active_removewall(screen_img, region = None, *, template_threshold = 0.65, yellow_threshold = 0.25, max_matches = 32):
             '''
 Locate an active (yellow) remove-wall control via ``removewall.png`` template
 matching plus per-hit yellow color verification.
@@ -504,25 +491,23 @@ matching plus per-hit yellow color verification.
 Returns the **leftmost** center among hits that pass both ``template_threshold``
 and ``yellow_threshold``, or ``(None, None)`` when none qualify.
 '''
-            matches = VisionService._find_template_matches(screen_img, 'removewall.png', template_threshold, region, max_matches = max_matches)
-            if not matches:
-                return (None, None)
-            (frame_h, frame_w) = screen_img.shape[:2]
-            passing = []
-            for left, top, tw, th, _score in matches:
-                x0 = max(0, min(int(left), frame_w))
-                y0 = max(0, min(int(top), frame_h))
-                x1 = max(0, min(int(left) + int(tw), frame_w))
-                y1 = max(0, min(int(top) + int(th), frame_h))
-                crop = screen_img[y0:y1, x0:x1]
-                if VisionService.yellow_fraction(crop) < yellow_threshold:
-                    continue
-                passing.append((int(left) + int(tw) // 2, int(top) + int(th) // 2))
-            if not passing:
-                return (None, None)
-            return min(passing, key = (lambda pt: pt[0]))
-
-        
+            passing = VisionService._find_colored_wall_centers(screen_img, 'removewall.png', VisionService.yellow_fraction, yellow_threshold, template_threshold, region = region, max_matches = max_matches)
+            if passing:
+                return min(passing, key = (lambda pt: pt[0]))
+            if region is not None and screen_img is not None and getattr(screen_img, 'ndim', 0) == 3:
+                (rx, ry, rw, rh) = region
+                (fh, fw) = screen_img.shape[:2]
+                left_w = max(1, int(rw * 0.58))
+                sub = screen_img[max(0, ry):min(fh, ry + rh), max(0, rx):min(fw, rx + left_w)]
+                if sub.size > 0:
+                    hsv = cv2.cvtColor(sub, cv2.COLOR_BGR2HSV)
+                    mask = cv2.inRange(hsv, (18, 100, 130), (40, 255, 255))
+                    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    valid = [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) >= 12]
+                    if valid:
+                        bx, by, bw, bh = min(valid, key = (lambda b: b[0]))
+                        return (rx + bx + bw // 2, ry + by + bh // 2)
+            return (None, None)
         @staticmethod
         def scaled_multiupgrade_cost_redness_above(screen_w, screen_h):
             '''
@@ -541,8 +526,6 @@ ROI height — scaled from :data:`_MULTIUPGRADE_COST_REDNESS_ABOVE_AT_BASELINE`
             rw = max(1, int(round(base_rw * sw / float(ref_w))))
             rh = max(1, int(round(base_rh * sh / float(ref_h))))
             return (center_offset, rw, rh)
-
-        
         @staticmethod
         def red_hue_fraction(bgr, *, sat_floor = 40, val_floor = 40):
             '''
@@ -561,8 +544,6 @@ with saturation and value at least ``sat_floor`` / ``val_floor``.
             if total > 0:
                 return float(cv2.countNonZero(mask)) / float(total)
             return 0
-
-        
         @staticmethod
         def _clip_rect_xywh(x, y, w, h, frame_w, frame_h):
             (x2, y2) = (x + w, y + h)  # [recovered: pycdc reversed STORE_FAST_STORE_FAST pairs]
@@ -574,8 +555,6 @@ with saturation and value at least ``sat_floor`` / ``val_floor``.
             if rw <= 0 or rh <= 0:
                 return None
             return (x0, y0, rw, rh)
-
-        
         @staticmethod
         def _match_template_top_left(screen_img, template_name, threshold, region = None):
             '''
@@ -620,9 +599,6 @@ Best ``cv2.matchTemplate`` match: ``(left, top, t_w, t_h, score)``.
                 return (None, None, None, None, 0)
                 e = None
                 del e
-
-
-        
         @staticmethod
         def _find_template_matches(screen_img, template_name, threshold, region = None, *, max_matches = 2, suppress_pad_frac = 0.5):
             '''Up to ``max_matches`` non-overlapping ``matchTemplate`` hits: ``(left, top, t_w, t_h, score)``.'''
@@ -633,7 +609,6 @@ Best ``cv2.matchTemplate`` match: ``(left, top, t_w, t_h, score)``.
                 if template is None:
                     logger.error(f'''Template not found: {template_path}''')
                     return []
-                template = VisionService._resize_template_for_screen(template, screen_img)
                 if region:
                     (x, y, w, h) = region
                     (h_screen, w_screen) = screen_img.shape[:2]
@@ -645,6 +620,7 @@ Best ``cv2.matchTemplate`` match: ``(left, top, t_w, t_h, score)``.
                 else:
                     search_img = screen_img
                     (offset_x, offset_y) = (0, 0)
+                template = VisionService._best_scaled_template(template, screen_img, search_img, template_name)
                 (t_h, t_w) = template.shape[:2]
                 (s_h, s_w) = search_img.shape[:2]
                 if t_w > s_w or t_h > s_h:
@@ -677,9 +653,6 @@ Best ``cv2.matchTemplate`` match: ``(left, top, t_w, t_h, score)``.
                 return None
                 e = None
                 del e
-
-
-        
         @staticmethod
         def _upgrade_cost_redness_for_template_rect(screen_img, left, top, tw, th, conf, *, center_offset, roi_w, roi_h, frame_w, frame_h):
             '''Measure :meth:`red_hue_fraction` in an ``roi_w×roi_h`` box whose center sits ``center_offset`` px above the template center.'''
@@ -698,10 +671,8 @@ Best ``cv2.matchTemplate`` match: ``(left, top, t_w, t_h, score)``.
             crop = screen_img[y0:y0 + ch, x0:x0 + cw]
             red = VisionService.red_hue_fraction(crop)
             return UpgradeCostIconRedness('multiupgrade.png', True, conf, red, clipped, (click_cx, click_cy))
-
-        
         @staticmethod
-        def upgrade_cost_redness_by_resource_icons(screen_img, *, match_threshold = 0.8, region = None):
+        def upgrade_cost_redness_by_resource_icons(screen_img, *, match_threshold = 0.74, region = None):
             '''
 Locate ``multiupgrade.png`` (up to two matches), then measure :meth:`red_hue_fraction`
 in an **80×25-at-baseline** box whose center is **43 px above** each template center
@@ -719,25 +690,22 @@ Updates :class:`~app.config.Config` from ``screen_img`` so template paths match 
             cfg.set_target_size_from_frame(screen_img)
             (frame_h, frame_w) = screen_img.shape[:2]
             (center_offset, roi_w, roi_h) = VisionService.scaled_multiupgrade_cost_redness_above(frame_w, frame_h)
-            matches = VisionService._find_template_matches(screen_img, 'multiupgrade.png', match_threshold, region, max_matches = 2)
+            search_region = region if region is not None else VisionService.bottom_half_region(screen_img)
+            matches = VisionService._find_template_matches(screen_img, 'multiupgrade.png', match_threshold, search_region, max_matches = 2)
             if not matches:
                 return UpgradeCostRednessPair(miss, miss)
-            
             def for_rect(left, top, tw, th, conf):
-                return VisionService._upgrade_cost_redness_for_template_rect(screen_img, left, top, tw, th, conf, center_offset = center_offset, roi_w = roi_w, roi_h = roi_h, frame_w = frame_w, frame_h = frame_h)
-
+                return VisionService._upgrade_cost_redness_for_template_rect(screen_img, left, top, tw, th, conf, center_offset=center_offset, roi_w=roi_w, roi_h=roi_h, frame_w=frame_w, frame_h=frame_h)
             if len(matches) == 1:
-                (left, top, tw, th, conf) = matches[0]
+                left, top, tw, th, conf = matches[0]
                 half = max(1, tw // 2)
                 gold = for_rect(left, top, half, th, conf)
                 elixir = for_rect(left + half, top, tw - half, th, conf)
             else:
-                matches = sorted(matches, key = (lambda m: m[0]))
+                matches = sorted(matches, key=lambda m: m[0])
                 gold = for_rect(*matches[0])
                 elixir = for_rect(*matches[1])
             return UpgradeCostRednessPair(gold, elixir)
-
-        
         @staticmethod
         def preprocess_bw_ui_text(bgr, *, white_text = False, brightness_floor = None):
             '''
@@ -758,8 +726,6 @@ Normalize high-contrast UI text to **black glyphs on white** (single channel, 0 
                 return binary
             (_, binary) = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             return binary
-
-        
         @staticmethod
         def filter_binary_ink_by_component_area(binary, *, min_area = 150, max_area = 800, ink_value = 0, background_value = 255):
             '''
@@ -782,8 +748,6 @@ area outside ``[min_area, max_area]`` to ``background_value``.
                     continue
                 out[labels == i] = bg
             return out
-
-        
         @staticmethod
         def scaled_cc_ink_bounds(screen_w, screen_h, *, aspect_key = None):
             '''
@@ -801,8 +765,6 @@ Scales by ``(screen_w / ref_w) * (screen_h / ref_h)`` (blob pixel area vs captur
             sh = max(1, int(screen_h))
             scale = (sw / float(ref_w)) * (sh / float(ref_h))
             return (max(1, int(round(base_min * scale))), max(1, int(round(base_max * scale))))
-
-        
         @staticmethod
         def scaled_top_center_menu_side(screen_w, screen_h, *, aspect_key = None):
             '''
@@ -816,8 +778,6 @@ the aspect baseline by **width** (``1000`` @ 2560 for both 16:10 and 16:9).
             (ref_w, _ref_h) = ASPECT_BASELINE[key]
             sw = max(1, int(screen_w))
             return max(1, int(round(base_side * sw / float(ref_w))))
-
-        
         @staticmethod
         def scaled_wall_menu_cc_ink_bounds(screen_w, screen_h, *, aspect_key = None):
             '''
@@ -833,13 +793,11 @@ the aspect baseline by **width** (``1000`` @ 2560 for both 16:10 and 16:9).
             sh = max(1, int(screen_h))
             scale = (sw / float(ref_w)) * (sh / float(ref_h))
             return (max(1, int(round(base_min * scale))), max(1, int(round(base_max * scale))))
-
-        
         @staticmethod
         def _ocr_query_matches(raw, query_norm, *, case_sensitive, match_alnum_only, fuzzy_min_ratio):
             if not query_norm:
                 return False
-            
+
             def norm_text(s):
                 s = s.strip()
                 if case_sensitive:
@@ -854,36 +812,33 @@ the aspect baseline by **width** (``1000`` @ 2560 for both 16:10 and 16:9).
                 aq = re.sub('[^a-z0-9]', '', query_norm.lower())
                 if aq and aq in ar:
                     return True
-                if aq and ar and ar in aq and len(ar) >= max(4, int(0.55 * len(aq))):
+                if aq and ar and (ar in aq) and (len(ar) >= max(4, int(0.55 * len(aq)))):
                     return True
-            if not fuzzy_min_ratio is None:
+            if fuzzy_min_ratio is not None:
                 if match_alnum_only:
                     pass
                 elif case_sensitive:
                     pass
-                
                 cr = r.lower()
                 cq = re.sub('[^a-z0-9]', '', query_norm.lower()) if match_alnum_only else query_norm
                 if len(cq) < 3:
                     return False
-                (lo, hi) = sorted((len(cr), len(cq)))
+                lo, hi = sorted((len(cr), len(cq)))
                 if hi and lo / hi < 0.5:
                     return False
                 ratio = difflib.SequenceMatcher(None, cq, cr).ratio()
                 if ratio >= fuzzy_min_ratio:
                     return True
             return False
-
-        
         @staticmethod
         def _ocr_username_match_tier(raw, query_norm, *, case_sensitive, match_alnum_only, fuzzy_min_ratio):
-            '''
+            """
 Rank how well ``raw`` matches the username (higher is better).
 Used to pick a click target: prefer full name in OCR, then longest token, then confidence.
-'''
+"""
             if not query_norm:
                 return 0
-            
+
             def norm_text(s):
                 s = s.strip()
                 if case_sensitive:
@@ -897,11 +852,9 @@ Used to pick a click target: prefer full name in OCR, then longest token, then c
                 return 3
             if query_norm in r:
                 return 2
-            if match_alnum_only and aq and ar and ar in aq and len(ar) >= max(4, int(0.55 * len(aq))):
+            if match_alnum_only and aq and ar and (ar in aq) and (len(ar) >= max(4, int(0.55 * len(aq)))):
                 return 1
             return 0
-
-        
         @staticmethod
         def save_hud_ocr_debug_outputs(pil_mono, mono_gray, tess_data, *, tesseract_config, tsv_path, boxes_png_path):
             '''
@@ -980,10 +933,6 @@ Write Tesseract ``image_to_tsv`` and a word-level bounding-box overlay (mono / O
                         return None
                         exc = None
                         del exc
-
-
-
-        
         @staticmethod
         def _preprocess_ocr_region(screen_img, region, *, preprocess, white_text, brightness_floor, cc_filter_blobs, cc_min_area, cc_max_area, roi_upscale, save_preprocess_png):
             '''
@@ -1044,8 +993,6 @@ pixel coords back to full-frame using ``inv = 1.0 / coord_scale`` and the offset
                     logger.warning('Could not save OCR preprocess debug PNG')
             pil = Image.fromarray(mono)
             return (pil, mono, coord_scale, offset_x, offset_y)
-
-
         @staticmethod
         def _tesseract_single_glyph_confidence_psm10(mono_gray, left, top, right, bottom, *, expected_char = '', pad_px = 2):
             '''
@@ -1126,10 +1073,6 @@ very narrow glyphs (common for ``image_to_boxes``), which would falsely read as 
 
                 except (TypeError, ValueError):
                     math.nan
-
-
-
-        
         @staticmethod
         def save_chars_ocr_debug_outputs(mono_gray, raw_box_text, parsed_chars, *, box_path, boxes_png_path, glyph_confidences = None):
             '''
@@ -1183,10 +1126,6 @@ non-finite values are shown as ``?`` on the overlay.
                         return None
                         exc = None
                         del exc
-
-
-
-        
         @staticmethod
         def find_chars_ocr(screen_img, region = None, *, preprocess = True, white_text = False, tesseract_config = '--psm 6', cc_filter_blobs = False, cc_min_area = None, cc_max_area = None, brightness_floor = None, save_preprocess_png = None, roi_upscale = 1, ocr_debug_box_path = None, ocr_debug_boxes_png_path = None, psm10_glyph_confidence = False):
             """
@@ -1203,6 +1142,8 @@ when unavailable).
 ``ocr_debug_boxes_png_path`` draws per-character boxes on the mono image (OCR pixel space);
 with ``psm10_glyph_confidence``, labels include the estimated confidence.
 """
+            if VisionService._stop_event is not None and VisionService._stop_event.is_set():
+                raise InterruptedError('Bot stopped by user')
             if pytesseract is None:
                 logger.error('pytesseract is not installed; pip install pytesseract and install the Tesseract OCR binary')
                 return []
@@ -1213,6 +1154,8 @@ with ``psm10_glyph_confidence``, labels include the estimated confidence.
             
             try:
                 raw = pytesseract.image_to_boxes(pil, config = tesseract_config)
+                if VisionService._stop_event is not None and VisionService._stop_event.is_set():
+                    raise InterruptedError('Bot stopped by user')
                 mono_h = int(mono.shape[0])
                 inv = 1 / coord_scale if coord_scale > 0 else 1
                 chars = []
@@ -1257,10 +1200,6 @@ with ``psm10_glyph_confidence``, labels include the estimated confidence.
                     return None
                 except ValueError:
                     []
-
-
-
-        
         @staticmethod
         def find_words_ocr(screen_img, region = None, *, query = None, min_confidence = 30, case_sensitive = False, preprocess = True, white_text = False, tesseract_config = '--psm 11', match_alnum_only = False, fuzzy_min_ratio = None, cc_filter_blobs = False, cc_min_area = None, cc_max_area = None, brightness_floor = None, save_preprocess_png = None, roi_upscale = 1, ocr_debug_tsv_path = None, ocr_debug_boxes_png_path = None):
             '''
@@ -1303,6 +1242,8 @@ Args:
 Returns:
     List of ``OcrWordBox`` in full-screen coordinates (including ROI offset).
 '''
+            if VisionService._stop_event is not None and VisionService._stop_event.is_set():
+                raise InterruptedError('Bot stopped by user')
             if pytesseract is None:
                 logger.error('pytesseract is not installed; pip install pytesseract and install the Tesseract OCR binary')
                 return []
@@ -1312,7 +1253,10 @@ Returns:
             (pil, mono, coord_scale, offset_x, offset_y) = prep
             
             try:
+                tesseract_config = tesseract_config or ''
                 data = pytesseract.image_to_data(pil, output_type = pytesseract.Output.DICT, config = tesseract_config)
+                if VisionService._stop_event is not None and VisionService._stop_event.is_set():
+                    raise InterruptedError('Bot stopped by user')
                 VisionService.save_hud_ocr_debug_outputs(pil, mono, data, tesseract_config = tesseract_config, tsv_path = ocr_debug_tsv_path, boxes_png_path = ocr_debug_boxes_png_path)
                 _ = min_confidence
                 n = len(data.get('text', []))
@@ -1348,7 +1292,6 @@ Returns:
         _TESSERACT_NUMBERS_HUD = '--psm 6 -c tessedit_char_whitelist=0123456789l'
         _TESSERACT_LETTERS_SPARSE = '--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
         _TESSERACT_WALL_LABEL_SPARSE = '--psm 11 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-        
         @staticmethod
         def numbers_hud_roi_top_right(screen_w, screen_h):
             '''
@@ -1369,8 +1312,6 @@ Returns ``(x, y, w, h)`` in screen pixels, anchored to the top-right corner.
             x = max(0, sw - rw)
             y = 0
             return (x, y, rw, rh)
-
-        
         @staticmethod
         def top_middle_square_roi(screen_w, screen_h, side = None, *, aspect_key = None):
             '''
@@ -1387,8 +1328,6 @@ width/height at most ``side`` (clamped to the frame).
             x = max(0, (sw - rw) // 2)
             y = 0
             return (x, y, rw, rh)
-
-        
         @staticmethod
         def ocr_letters_top_center(screen_img, *, side = None, min_confidence = 0, white_text = True, brightness_floor = None, cc_filter_blobs = True, cc_min_area = None, cc_max_area = None, tesseract_config = None, save_preprocess_png = None):
             '''
@@ -1422,8 +1361,6 @@ then Tesseract with :data:`_TESSERACT_LETTERS_SPARSE`
                     continue
                 out.append(b)
             return out
-
-        
         @staticmethod
         def find_wall_labels_top_center_ocr(screen_img, *, side = None, min_confidence = 0, white_text = True, brightness_floor = None, cc_filter_blobs = True, cc_min_area = None, cc_max_area = None, tesseract_config = None, save_debug_preprocess = False):
             '''
@@ -1444,84 +1381,96 @@ When ``save_debug_preprocess`` is ``True``, writes the binarized ROI to
             best = max(matches, key = (lambda b: b.top + b.height))
             return best.center
             b = None
-
-        
         @staticmethod
         def _ocr_word_y_center(box):
             return box.top + box.height * 0.5
-
-        
         @staticmethod
         def cluster_ocr_boxes_by_y(boxes, y_tolerance):
-            '''
+            """
 Group OCR boxes that share a text line: union on pairs whose vertical centers
 differ by at most ``y_tolerance`` px.
-'''
+"""
             if not boxes:
                 return []
             n = len(boxes)
-            cy = [ VisionService._ocr_word_y_center(boxes[i]) for i in range(n) ]
+            cy = [VisionService._ocr_word_y_center(boxes[i]) for i in range(n)]
             parent = list(range(n))
-            
+
             def find(i):
                 while parent[i] != i:
                     parent[i] = parent[parent[i]]
                     i = parent[i]
                 return i
 
-            
             def union(i, j):
-                (pi, pj) = (find(i), find(j))  # [recovered: pycdc reversed STORE_FAST_STORE_FAST pairs]
+                pi, pj = find(i), find(j)
                 if pi != pj:
                     parent[pi] = pj
-                    return None
 
             tol = float(y_tolerance)
             for i in range(n):
                 for j in range(i + 1, n):
-                    if not abs(cy[i] - cy[j]) <= tol:
-                        continue
-                    union(i, j)
+                    if abs(cy[i] - cy[j]) <= tol:
+                        union(i, j)
             range(n)
-            groups = { }
+            groups = {}
             for i in range(n):
                 r = find(i)
                 groups.setdefault(r, []).append(boxes[i])
             out = list(groups.values())
             for cl in out:
-                cl.sort(key = (lambda b: b.left))
-            out.sort(key = (lambda cl: VisionService._ocr_word_y_center(cl[0])))
+                cl.sort(key=lambda b: b.left)
+            out.sort(key=lambda cl: VisionService._ocr_word_y_center(cl[0]))
             return out
-            i = None
-
-        
         @staticmethod
-        def merge_numeric_cluster(cluster, *, join_separator = ' '):
-            '''
+        def split_cluster_on_gaps(cluster, gap_px):
+            """Split one line of character boxes wherever a horizontal gap exceeds
+``gap_px``. Returns a list of runs, left to right.
+
+A line of OCR'd characters is not necessarily one number. Anything bright and
+narrow sharing the line — the "+385,306" loot floater that drifts beside the
+HUD after a raid, a lamp post behind a bar, an icon edge — is read as a digit
+and, merged into the row, silently multiplies the reading by ten or more (live:
+elixir 16,256,996 read as 116,256,996 and acted on). Digits inside a number sit
+1-3 px apart at a 1299-wide capture and 6-8 px across a thousands separator;
+anything that is not part of the number is much further away than that.
+"""
+            parts = sorted(cluster or [], key=lambda b: b.left)
+            if len(parts) < 2:
+                return [list(parts)] if parts else []
+            runs = [[parts[0]]]
+            for box in parts[1:]:
+                prev = runs[-1][-1]
+                if box.left - (prev.left + prev.width) > float(gap_px):
+                    runs.append([])
+                runs[-1].append(box)
+            return runs
+
+        @staticmethod
+        def merge_numeric_cluster(cluster, *, join_separator=' '):
+            """
 Sort left-to-right and union bounding boxes into one :class:`GroupedNumber`.
 
 ``join_separator`` defaults to a space (word-level OCR); pass ``""`` when each
 :class:`OcrWordBox` already holds a single character (e.g. from
 :meth:`find_chars_ocr`) so digits concatenate into one number.
-'''
+"""
             if not cluster:
                 return GroupedNumber('', 0, 0, 0, 0, float('nan'))
-            parts = sorted(cluster, key = (lambda b: b.left))
-            text = join_separator.join([ p.text.strip() for p in parts if p.text.strip() ])
+            parts = sorted(cluster, key=lambda b: b.left)
+            text = join_separator.join([p.text.strip() for p in parts if p.text.strip()])
             text = text.replace('l', '1')
-            left = min([ p.left for p in parts ])
-            top = min([ p.top for p in parts ])
-            right = max([ p.left + p.width for p in parts ])
-            bottom = max([ p.top + p.height for p in parts ])
-            confs = [ float(p.confidence) for p in parts if not math.isnan(float(p.confidence)) ]  # [recovered: decompiler dropped the `not`, keeping only NaN confidences]
+            left = min([p.left for p in parts])
+            top = min([p.top for p in parts])
+            right = max([p.left + p.width for p in parts])
+            bottom = max([p.top + p.height for p in parts])
+            confs = [float(p.confidence) for p in parts if not math.isnan(float(p.confidence))]
             conf = float(sum(confs) / len(confs)) if confs else float('nan')
-            return GroupedNumber(text = text, left = left, top = top, width = max(1, right - left), height = max(1, bottom - top), confidence = conf)
-            p = None
+            return GroupedNumber(text=text, left=left, top=top, width=max(1, right - left), height=max(1, bottom - top), confidence=conf)
 
-        
         @staticmethod
-        def extract_grouped_numbers_in_region(screen_img, region, *, min_confidence = 0, white_text = True, tesseract_config = None, y_tolerance_px = None, cc_filter_blobs = True, cc_min_area = None, cc_max_area = None, preprocess = True, save_preprocess_png = None, roi_upscale = HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE, ocr_debug_box_path = None, ocr_debug_boxes_png_path = None, psm10_glyph_confidence = False, hud_debug_char_clusters_out = None, allow_hud_ocr_debug = False):
-            '''
+        def extract_grouped_numbers_in_region(screen_img, region, *, min_confidence=0, white_text=True, tesseract_config=None, y_tolerance_px=None, cc_filter_blobs=True, cc_min_area=None, cc_max_area=None, preprocess=True, save_preprocess_png=None, roi_upscale=HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE, ocr_debug_box_path=None, ocr_debug_boxes_png_path=None, psm10_glyph_confidence=False, hud_debug_char_clusters_out=None, allow_hud_ocr_debug=False):
+            """
 **Pipeline:** ROI crop → optional BGR ``roi_upscale`` before binarize → grayscale via :meth:`preprocess_bw_ui_text` (``white_text``) →
 black/white mask inverted to ink on white → optional
 :meth:`filter_binary_ink_by_component_area` (defaults from :meth:`scaled_cc_ink_bounds`) →
@@ -1546,7 +1495,7 @@ When ``allow_hud_ocr_debug`` is ``True``:
 ``psm10_glyph_confidence``: optional second Tesseract pass per glyph (see :meth:`find_chars_ocr`).
 ``hud_debug_char_clusters_out``: when set to an empty mutable list, it is cleared and filled
 with one inner list per Y-cluster (characters left-to-right) after clustering, for scripts / debug.
-'''
+"""
             if not allow_hud_ocr_debug:
                 save_preprocess_png = None
                 ocr_debug_box_path = None
@@ -1555,52 +1504,105 @@ with one inner list per Y-cluster (characters left-to-right) after clustering, f
                 hud_debug_char_clusters_out = None
             if screen_img is None or screen_img.size == 0:
                 return []
-            (h_s, w_s) = screen_img.shape[:2]
-            cfg = f'''{VisionService._TESSERACT_NUMBERS_HUD}'''.strip()
-            if not tesseract_config is None:
+            h_s, w_s = screen_img.shape[:2]
+            cfg = f'{VisionService._TESSERACT_NUMBERS_HUD}'.strip()
+            if tesseract_config is not None:
                 cfg = tesseract_config
             _ = min_confidence
-            chars = VisionService.find_chars_ocr(screen_img, region = region, preprocess = preprocess, white_text = white_text, tesseract_config = cfg, cc_filter_blobs = cc_filter_blobs, cc_min_area = cc_min_area, cc_max_area = cc_max_area, save_preprocess_png = save_preprocess_png, roi_upscale = roi_upscale, ocr_debug_box_path = ocr_debug_box_path, ocr_debug_boxes_png_path = ocr_debug_boxes_png_path, psm10_glyph_confidence = psm10_glyph_confidence)
-            digit_chars = [ c for c in chars if c.text.isdigit() or c.text == 'l' ]  # [recovered: decompiler dropped the isdigit() disjunct; 'l' is kept because merge_numeric_cluster maps it to '1']
+            chars = VisionService.find_chars_ocr(screen_img, region=region, preprocess=preprocess, white_text=white_text, tesseract_config=cfg, cc_filter_blobs=cc_filter_blobs, cc_min_area=cc_min_area, cc_max_area=cc_max_area, save_preprocess_png=save_preprocess_png, roi_upscale=roi_upscale, ocr_debug_box_path=ocr_debug_box_path, ocr_debug_boxes_png_path=ocr_debug_boxes_png_path, psm10_glyph_confidence=psm10_glyph_confidence)
+            digit_chars = [c for c in (chars or ()) if c.text.isdigit() or c.text == 'l']
             if not digit_chars:
                 return []
             if y_tolerance_px is None:
-                med_h = float(np.median([ c.height for c in digit_chars ]))
+                med_h = float(np.median([c.height for c in digit_chars]))
                 y_tol = max(8, med_h * 0.45, float(h_s) * (_NUMBERS_REF_LINE_HEIGHT_PX / 1600) * 0.35)
             else:
                 y_tol = float(y_tolerance_px)
             clusters = VisionService.cluster_ocr_boxes_by_y(digit_chars, y_tol)
-            if not hud_debug_char_clusters_out is None:
+            med_w = float(np.median([c.width for c in digit_chars])) or 1.0
+            gap_px = max(3.0, med_w * _NUMBER_RUN_GAP_WIDTHS)
+            runs = []
+            for cl in clusters:
+                runs.extend(VisionService.split_cluster_on_gaps(cl, gap_px))
+            clusters = runs
+            if hud_debug_char_clusters_out is not None:
                 hud_debug_char_clusters_out.clear()
                 for cl in clusters:
-                    hud_debug_char_clusters_out.append(sorted(cl, key = (lambda b: b.left)))
-            return [ VisionService.merge_numeric_cluster(cl, join_separator = '') for cl in clusters ]
-            c = None
-            c = None
-            cl = None
+                    hud_debug_char_clusters_out.append(sorted(cl, key=lambda b: b.left))
+            return [VisionService.merge_numeric_cluster(cl, join_separator='') for cl in clusters]
 
-        
         @staticmethod
-        def extract_top_right_hud_numbers(screen_img, *, min_confidence = 0, white_text = True, tesseract_config = None, y_tolerance_px = None, cc_filter_blobs = True, cc_min_area = None, cc_max_area = None, preprocess = True, save_preprocess_png = None, roi_upscale = HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE, ocr_debug_box_path = None, ocr_debug_boxes_png_path = None, psm10_glyph_confidence = False, hud_debug_char_clusters_out = None, allow_hud_ocr_debug = False):
-            '''
-Full **top-right HUD** number pipeline on ``screen_img`` (see
-:meth:`extract_grouped_numbers_in_region`). ROI from :meth:`numbers_hud_roi_top_right`.
+        def _new_hud_numbers(frame, *, allow_partial=False):
+            """Read white HUD digits while excluding the colored translucent bars."""
+            from app.services.clash_digits import read_price_digits
+            height, width = frame.shape[:2]
+            groups = []
+            aliases = str.maketrans({'B': '8', 'S': '5', 'O': '0', 'I': '1', 'l': '1'})
+            for index in range(3):
+                left = width - round(height * 0.25)
+                right = width - round(height * 0.0625)
+                top = round(height * (0.0265 + index * 0.0575))
+                roi_height = max(1, round(height * 0.032))
+                crop = frame[top:top + roi_height, left:right]
+                if crop.size == 0:
+                    if allow_partial:
+                        continue
+                    return []
+                max_val = 2000000 if index == 2 else 30000000
+                glyphs = read_price_digits(crop)
+                if glyphs is not None and glyphs.score >= 0.84 and 0 <= glyphs.value <= max_val:
+                    groups.append(GroupedNumber(left=left, top=top, width=right - left, height=roi_height, text=str(glyphs.value), confidence=float(glyphs.score * 100.0)))
+                    continue
+                votes = []
+                confidences = []
+                for floor, upscale in ((210, 3), (180, 3)):
+                    enlarged = cv2.resize(crop, None, fx=upscale, fy=upscale, interpolation=cv2.INTER_CUBIC)
+                    mask = cv2.inRange(enlarged, (floor, floor, floor), (255, 255, 255))
+                    padded = cv2.copyMakeBorder(255 - mask, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=255)
+                    words = VisionService.find_words_ocr(cv2.cvtColor(padded, cv2.COLOR_GRAY2BGR), preprocess=False, tesseract_config='--psm 7 -c tessedit_char_whitelist=0123456789')
+                    tokens = [word.text.strip().strip(chr(34) + chr(39) + '.,:;') for word in sorted(words or (), key=lambda w: w.left)]
+                    if not tokens or any(not re.fullmatch('[0-9BSOIl]+', token) for token in tokens):
+                        continue
+                    if any(not math.isfinite(float(word.confidence)) or (0 < word.confidence < 40) for word in words):
+                        continue
+                    value = int(''.join(tokens).translate(aliases))
+                    if value > max_val:
+                        continue
+                    votes.append(value)
+                    confidences.append(min(w.confidence for w in words))
+                if not votes:
+                    if glyphs is not None and glyphs.score >= 0.78 and 0 <= glyphs.value <= max_val:
+                        groups.append(GroupedNumber(left=left, top=top, width=right - left, height=roi_height, text=str(glyphs.value), confidence=float(glyphs.score * 100.0)))
+                        continue
+                    if allow_partial:
+                        continue
+                    return []
+                value = max(set(votes), key=votes.count)
+                if glyphs is not None and glyphs.score >= 0.80 and glyphs.value in votes:
+                    value = glyphs.value
+                elif len(votes) >= 2 and votes.count(value) < 2:
+                    if allow_partial:
+                        continue
+                    return []
+                confidence = min(conf for vote, conf in zip(votes, confidences) if vote == value)
+                groups.append(GroupedNumber(left=left, top=top, width=right - left, height=roi_height, text=str(value), confidence=confidence))
+            return groups
 
-Updates :class:`~app.config.Config` capture size / aspect from ``screen_img`` when possible.
-Default ``roi_upscale`` is :data:`HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE` (BGR enlargement before binarize).
-
-``allow_hud_ocr_debug`` defaults to ``False`` so the GUI bot never enables preprocess saves,
-``.box`` / overlay writes, PSM-10 glyph confidence, or cluster dump unless explicitly opted in.
-'''
+        @staticmethod
+        def extract_top_right_hud_numbers(screen_img, *, min_confidence=0, white_text=True, tesseract_config=None, y_tolerance_px=None, cc_filter_blobs=True, cc_min_area=None, cc_max_area=None, preprocess=True, save_preprocess_png=None, roi_upscale=HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE, ocr_debug_box_path=None, ocr_debug_boxes_png_path=None, psm10_glyph_confidence=False, hud_debug_char_clusters_out=None, allow_hud_ocr_debug=False):
+            """\nFull **top-right HUD** number pipeline on ``screen_img`` (see\n:meth:`extract_grouped_numbers_in_region`). ROI from :meth:`numbers_hud_roi_top_right`.\n\nUpdates :class:`~app.config.Config` capture size / aspect from ``screen_img`` when possible.\nDefault ``roi_upscale`` is :data:`HUD_TOP_RIGHT_NUMBERS_ROI_UPSCALE` (BGR enlargement before binarize).\n\n``allow_hud_ocr_debug`` defaults to ``False`` so the GUI bot never enables preprocess saves,\n``.box`` / overlay writes, PSM-10 glyph confidence, or cluster dump unless explicitly opted in.\n"""
             if screen_img is None or screen_img.size == 0:
                 return []
-            cfg = Config()
-            cfg.set_target_size_from_frame(screen_img)
-            (h_s, w_s) = screen_img.shape[:2]
-            roi = VisionService.numbers_hud_roi_top_right(w_s, h_s)
-            return VisionService.extract_grouped_numbers_in_region(screen_img, roi, min_confidence = min_confidence, white_text = white_text, tesseract_config = tesseract_config, y_tolerance_px = y_tolerance_px, cc_filter_blobs = cc_filter_blobs, cc_min_area = cc_min_area, cc_max_area = cc_max_area, preprocess = preprocess, save_preprocess_png = save_preprocess_png, roi_upscale = roi_upscale, ocr_debug_box_path = ocr_debug_box_path, ocr_debug_boxes_png_path = ocr_debug_boxes_png_path, psm10_glyph_confidence = psm10_glyph_confidence, hud_debug_char_clusters_out = hud_debug_char_clusters_out, allow_hud_ocr_debug = allow_hud_ocr_debug)
-
-        
+            else:
+                cfg = Config()
+                cfg.set_target_size_from_frame(screen_img)
+                h_s, w_s = screen_img.shape[:2]
+                build = VisionService.find_template(screen_img, 'build.png', region=(w_s // 2, h_s // 2, w_s - w_s // 2, h_s - h_s // 2))
+                if build[0] is not None:
+                    return VisionService._new_hud_numbers(screen_img)
+                else:
+                    roi = VisionService.numbers_hud_roi_top_right(w_s, h_s)
+                    return VisionService.extract_grouped_numbers_in_region(screen_img, roi, min_confidence=min_confidence, white_text=white_text, tesseract_config=tesseract_config, y_tolerance_px=y_tolerance_px, cc_filter_blobs=cc_filter_blobs, cc_min_area=cc_min_area, cc_max_area=cc_max_area, preprocess=preprocess, save_preprocess_png=save_preprocess_png, roi_upscale=roi_upscale, ocr_debug_box_path=ocr_debug_box_path, ocr_debug_boxes_png_path=ocr_debug_boxes_png_path, psm10_glyph_confidence=psm10_glyph_confidence, hud_debug_char_clusters_out=hud_debug_char_clusters_out, allow_hud_ocr_debug=allow_hud_ocr_debug)
         @staticmethod
         def parse_loot_amount_from_grouped_text(text):
             '''
@@ -1617,40 +1619,39 @@ elixir left‑to‑right in the OCR ROI — take clusters sorted by horizontal c
                 return int(digits)
             except ValueError:
                 return None
-
-
-        
         @staticmethod
         def parse_hud_resources_triplet(groups):
-            '''
-From :meth:`extract_top_right_hud_numbers` clusters, derive ``(gold, elixir, dark_elixir)``:
-the home HUD stacks the three resource bars vertically (gold, elixir, dark top to bottom),
-so the three **topmost** decoded numbers are taken in vertical order. Returns ``None`` if
-fewer than three numeric clusters are available.
-'''
-            # The HUD numbers are right-aligned, so a horizontal sort orders them by digit
-            # count (7-digit elixir would land before 6-digit gold) — vertical order is the
-            # only stable assignment.
+            """\nFrom :meth:`extract_top_right_hud_numbers` clusters, derive ``(gold, elixir, dark_elixir)``:\nthe home HUD stacks the three resource bars vertically (gold, elixir, dark top to bottom),\nso the three **topmost** rows are taken in vertical order — one number per row, the\nrightmost when a row decodes more than one. Returns ``None`` if fewer than three rows\nare available.\n"""
             scored = []
             for g in groups:
                 v = VisionService.parse_loot_amount_from_grouped_text(g.text)
                 if v is None:
                     continue
-                cy = float(g.top) + float(g.height) * 0.5
-                scored.append((cy, v))
-            scored.sort(key = (lambda t: t[0]))
-            if len(scored) < 3:
-                return None
-            return (scored[0][1], scored[1][1], scored[2][1])
-
-        
+                else:
+                    cy = float(g.top) + float(g.height) * 0.5
+                    scored.append((cy, float(g.left) + float(g.width), v, float(g.height)))
+            scored.sort(key=lambda t: t[0])
+            if not scored:
+                return
+            else:
+                row_tol = max(4.0, float(np.median([t[3] for t in scored])) * 0.6)
+                rows = []
+                for entry in scored:
+                    if rows and abs(entry[0] - rows[(-1)][0]) <= row_tol:
+                        if entry[1] > rows[(-1)][1]:
+                            rows[(-1)] = entry
+                        continue
+                    else:
+                        rows.append(entry)
+                if len(rows) < 3:
+                    return
+                else:
+                    return (rows[0][2], rows[1][2], rows[2][2])
         @staticmethod
         def _ocr_confidence_key(w):
             if math.isnan(w.confidence):
                 return -1
             return float(w.confidence)
-
-        
         @staticmethod
         def find_word_on_screen(screen_img, word_or_phrase, region = None, **kwargs):
             '''
@@ -1671,19 +1672,16 @@ Extra kwargs are forwarded (e.g. ``min_confidence``, ``preprocess``).
             match_alnum_only = bool(kwargs.get('match_alnum_only', False))
             fuzzy_min_ratio = kwargs.get('fuzzy_min_ratio')
             qnorm = word_or_phrase.strip() if case_sensitive else word_or_phrase.strip().lower()
-            
             def pick_key(w):
-                tier = VisionService._ocr_username_match_tier(w.text, qnorm, case_sensitive = case_sensitive, match_alnum_only = match_alnum_only, fuzzy_min_ratio = fuzzy_min_ratio)
+                tier = VisionService._ocr_username_match_tier(w.text, qnorm, case_sensitive=case_sensitive, match_alnum_only=match_alnum_only, fuzzy_min_ratio=fuzzy_min_ratio)
                 if match_alnum_only:
                     alen = len(re.sub('[^a-z0-9]', '', w.text.lower()))
                 else:
                     alen = len(w.text.strip())
                 return (tier, alen, VisionService._ocr_confidence_key(w))
-
-            best = max(matches, key = pick_key)
+            best = max(matches, key=pick_key)
             return best.center
 
 
 except ImportError:
     pytesseract = None
-

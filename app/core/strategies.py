@@ -66,11 +66,39 @@ class AttackStrategy:
             self._sync_frame_size(frame)
             if selected:
                 roi = self.vision.bottom_half_region(frame)
-                x, y = self.vision.find_template(frame, selected, region=roi)
+                x, y = self._find_non_cc_template(frame, selected, threshold=0.75, region=roi)
                 if x is None:
                     return None, True  # The previously selected troop is exhausted.
                 self.input.click(x, y, pause=0.2, rand=False)
         return frame, handled
+
+    def _is_clan_castle_card(self, frame, left, top, tw, th):
+        """True when the card containing ``(left, top, tw, th)`` has the Clan Castle shield badge in its top-left corner."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return False
+        fh, fw = frame.shape[:2]
+        rx = max(0, int(left - tw * 0.45))
+        ry = max(0, int(top - th * 1.15))
+        rw = min(fw - rx, max(1, int(tw * 0.9)))
+        rh = min(fh - ry, max(1, int(th * 1.05)))
+        if rw <= 4 or rh <= 4:
+            return False
+        bx, _ = self.vision.find_template(frame, 'cc_badge.png', threshold=0.82, region=(rx, ry, rw, rh))
+        return bx is not None
+
+    def _find_non_cc_template(self, frame, template_name, *, threshold=0.75, region=None):
+        """Find the leftmost match of ``template_name`` that is NOT a Clan Castle troop/spell card."""
+        if type(self.vision) is not VisionService:
+            return self.vision.find_template(frame, template_name, threshold=threshold, region=region)
+        matches = self.vision._find_template_matches(frame, template_name, threshold, region, max_matches=4)
+        if not matches:
+            return (None, None)
+        for left, top, tw, th, _score in sorted(matches, key=lambda m: m[0]):
+            if self._is_clan_castle_card(frame, left, top, tw, th):
+                logger.debug('Skipping Clan Castle card for %s at %d,%d', template_name, left, top)
+                continue
+            return (int(left) + int(tw) // 2, int(top) + int(th) // 2)
+        return (None, None)
 
     
     def _point(self, key):
@@ -95,13 +123,6 @@ class AttackStrategy:
         random.shuffle(heroes)
         deployed_heroes = []
         roi = self.vision.bottom_half_region(frame)
-        (ix, iy) = self.vision.find_template(frame, 'loglauncher.png', threshold = 0.7, region = roi)
-        if not ix:
-            (ix, iy) = self.vision.find_template(frame, 'siegebarracks.png', threshold = 0.7, region = roi)
-        if ix:
-            deploy_point = self._get_hero_deploy_point(frame)
-            self.input.click(ix, iy, pause = 0.2, rand = False)
-            self.input.click(pause = 0.2, *deploy_point)
         for hero in heroes:
             fresh, interrupted = self._reward_checkpoint()
             if fresh is not None:
@@ -113,8 +134,8 @@ class AttackStrategy:
             if not bx:
                 continue
             deploy_point = self._get_hero_deploy_point(frame)
-            self.input.click(bx, by, pause = 0.2, rand = False)
-            self.input.click(pause = 0.2, *deploy_point)
+            self.input.click(bx, by, pause = random.uniform(0.15, 0.3), rand = False)
+            self.input.click(pause = random.uniform(0.15, 0.3), *deploy_point)
             # Remember the live, deployed appearance only for relocation after
             # a reward shifts the bar. Normal ability clicks retain main's slots.
             live = self.input.window_service.screenshot() if self.event_handler else frame
@@ -443,15 +464,36 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
         ev = stop_event or self.stop_event
         frame, _ = self._reward_checkpoint(frame)
         roi = self.vision.bottom_half_region(frame)
-        (tx, ty) = self.vision.find_template(frame, template_name, region = roi)
+        (tx, ty) = self._find_non_cc_template(frame, template_name, threshold = 0.72, region = roi)
+        if tx is None and template_name != 'goldendrag.png' and getattr(self.input, 'window_service', None) is not None:
+            for _ in range(3):
+                if ev and ev.wait(0.3):
+                    return True
+                fresh = self.input.window_service.screenshot()
+                if fresh is not None and getattr(fresh, 'size', 0):
+                    frame = fresh
+                    self._sync_frame_size(frame)
+                    roi = self.vision.bottom_half_region(frame)
+                    (tx, ty) = self._find_non_cc_template(frame, template_name, threshold = 0.70, region = roi)
+                    if tx is not None:
+                        break
         if tx is None:
+            if template_name != 'goldendrag.png' and frame is not None and getattr(frame, 'size', 0):
+                try:
+                    from app.utils.common import get_user_app_data_dir
+                    dbg = get_user_app_data_dir() / 'debug'
+                    dbg.mkdir(parents=True, exist_ok=True)
+                    path = dbg / f'troop_missing_{template_name.replace(".png", "")}_{int(time.time())}.jpg'
+                    cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 88])
+                    logger.info('Debug frame saved to %s', path)
+                except Exception:
+                    pass
             return False
         self.input.click(tx, ty, pause = 0.3, rand = False)
         if ev and ev.wait(0.2):
             return True
-        for _ in range(count):
+        for index in range(count):
             if ev and ev.is_set():
-                range(count)
                 return True
             fresh, handled = self._reward_checkpoint(selected=template_name)
             if handled and fresh is None:
@@ -459,7 +501,12 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
             if fresh is not None:
                 frame = fresh
             (px, py) = self._random_diamond_perimeter_point(frame)
-            self.input.click(px, py, pause = delay, rand = False)
+            # random human-like pacing: base delay ±60%, occasionally a longer pause
+            if random.random() < 0.12:
+                beat = delay * random.uniform(2.0, 3.2)
+            else:
+                beat = delay * random.uniform(0.6, 1.6)
+            self.input.click(px, py, pause = beat, rand = False)
         return True
 
     
@@ -475,7 +522,7 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
         frame, _ = self._reward_checkpoint(frame)
         self._sync_frame_size(frame)
         roi = self.vision.bottom_half_region(frame)
-        (bx, by) = self.vision.find_template(frame, 'earthquake.png', region = roi)
+        (bx, by) = self._find_non_cc_template(frame, 'earthquake.png', threshold = 0.75, region = roi)
         if bx:  # [recovered: decompiler turned `if` into `while`, causing endless earthquake spam after spells ran out]
             self.input.click(bx, by, pause = 0.2)
             offset = int(self.config.get_scaled('earthquake', 400))
@@ -504,8 +551,42 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
                 self.input.click_at(jx, jy, rand = False)
                 delay = random.uniform(0.1, 0.3)
                 if self.stop_event:
-                    self.stop_event.wait(delay)
+                    if self.stop_event.wait(delay):
+                        return None
                 else:  # [recovered: decompiler dropped the else — both waits ran, doubling every spell delay]
+                    time.sleep(delay)
+        offset = int(self.config.get_scaled('earthquake', 400))
+        ltr = self._earthquake_anchor_triplet(self._scaled_deployment_data(), offset)
+        (fh, fw) = frame.shape[:2]
+        for spell_tpl, drop_count in (('ragespell.png', 5), ('freezespell.png', 2), ('invisspell.png', 2)):
+            if self.stop_event and self.stop_event.is_set():
+                return None
+            fresh = self.input.window_service.screenshot()
+            if fresh is not None:
+                frame = fresh
+                self._sync_frame_size(frame)
+                roi = self.vision.bottom_half_region(frame)
+                (fh, fw) = frame.shape[:2]
+            (sx, sy) = self._find_non_cc_template(frame, spell_tpl, threshold = 0.75, region = roi)
+            if not sx:
+                continue
+            self.input.click(sx, sy, pause = 0.2, rand = False)
+            arc_pts = self._sample_arc_through_three(ltr, max(2, drop_count))
+            if random.choice((True, False)):
+                arc_pts.reverse()
+            jitter_px = int(self.config.scale_scalar(45))
+            for cx, cy in arc_pts[:drop_count]:
+                fresh, handled = self._reward_checkpoint(selected=spell_tpl)
+                if handled and fresh is None:
+                    break
+                jx = max(0, min(fw - 1, cx + random.randint(-jitter_px, jitter_px)))
+                jy = max(0, min(fh - 1, cy + random.randint(-jitter_px, jitter_px)))
+                self.input.click_at(jx, jy, rand = False)
+                delay = random.uniform(0.12, 0.25)
+                if self.stop_event:
+                    if self.stop_event.wait(delay):
+                        return None
+                else:
                     time.sleep(delay)
         return None
 
