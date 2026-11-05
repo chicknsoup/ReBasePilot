@@ -3,6 +3,7 @@
 # Bytecode version: 3.13.0rc3 (3571)
 # Source timestamp: 1970-01-01 00:00:00 UTC (0)
 
+import contextlib
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
@@ -80,6 +81,39 @@ class WindowService:
         for function, arguments, result in declarations:
             function.argtypes = arguments
             function.restype = result
+        if hasattr(self.user32, 'GetWindowDpiAwarenessContext') and hasattr(self.user32, 'SetThreadDpiAwarenessContext'):
+            self.user32.GetWindowDpiAwarenessContext.argtypes = [wintypes.HWND]
+            self.user32.GetWindowDpiAwarenessContext.restype = wintypes.HANDLE
+            self.user32.SetThreadDpiAwarenessContext.argtypes = [wintypes.HANDLE]
+            self.user32.SetThreadDpiAwarenessContext.restype = wintypes.HANDLE
+
+    @contextlib.contextmanager
+    def window_dpi_context(self, hwnd=None):
+        """Temporarily switch the calling thread to ``hwnd``'s DPI awareness context.
+
+        When the game window is placed on a Virtual Display (e.g. Virtual-Display-Driver at 100% DPI)
+        while the primary display uses 125%/150% DPI, Google Play Games (``CROSVM_1``, System-DPI-Aware)
+        renders and processes input at System DPI while Qt6 runs in Per-Monitor-V2 DPI. Matching the
+        thread's DPI context to ``hwnd`` ensures ``GetWindowRect``, ``PrintWindow``, and ``ClientToScreen``
+        use the exact coordinate space of ``CROSVM_1``.
+        """
+        target = hwnd or self.hwnd
+        prev = None
+        if target and hasattr(self.user32, 'GetWindowDpiAwarenessContext') and hasattr(self.user32, 'SetThreadDpiAwarenessContext'):
+            try:
+                ctx = self.user32.GetWindowDpiAwarenessContext(target)
+                if ctx:
+                    prev = self.user32.SetThreadDpiAwarenessContext(ctx)
+            except Exception:
+                prev = None
+        try:
+            yield
+        finally:
+            if prev:
+                try:
+                    self.user32.SetThreadDpiAwarenessContext(prev)
+                except Exception:
+                    pass
     def find_window(self):
         """\nResolve the game-surface HWND.\n\nHonors a user-pinned selection (Settings → Game window) first; otherwise falls back to\nauto-detection (Google Play Games window with a ``CROSVM*`` child surface).\n"""
         selection = load_window_selection()
@@ -199,8 +233,9 @@ fails. Candidates with a CROSVM surface are sorted first.
             return None
 
         try:
-            rect = wintypes.RECT()
-            self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+            with self.window_dpi_context(hwnd):
+                rect = wintypes.RECT()
+                self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
             w = rect.right - rect.left
             h = rect.bottom - rect.top
             if w <= 0 or h <= 0:
@@ -275,8 +310,9 @@ Outer window size in pixels (``GetWindowRect``), same basis as :meth:`screenshot
         try:
             if not self.hwnd and not self.find_window():
                 return None
-            rect = wintypes.RECT()
-            self.user32.GetWindowRect(self.hwnd, ctypes.byref(rect))
+            with self.window_dpi_context(self.hwnd):
+                rect = wintypes.RECT()
+                self.user32.GetWindowRect(self.hwnd, ctypes.byref(rect))
             w = rect.right - rect.left
             h = rect.bottom - rect.top
             if w <= 0 or h <= 0:
@@ -350,31 +386,38 @@ matches no template and reads no text, so acting on one means clicking blind.
         hwndDC = mfcDC = hbitmap = old_bitmap = None
         capture_hwnd = self.hwnd
         try:
-            rect = wintypes.RECT()
-            if not self.user32.GetWindowRect(capture_hwnd, ctypes.byref(rect)):
-                return None
-            width = rect.right - rect.left
-            height = rect.bottom - rect.top
-            if width <= 0 or height <= 0:
-                return None
-            hwndDC = self.user32.GetWindowDC(capture_hwnd)
-            if not hwndDC:
-                return None
-            mfcDC = self.gdi32.CreateCompatibleDC(hwndDC)
-            if not mfcDC:
-                return None
-            hbitmap = self.gdi32.CreateCompatibleBitmap(hwndDC, width, height)
-            if not hbitmap:
-                return None
-            old_bitmap = self.gdi32.SelectObject(mfcDC, hbitmap)
-            if not old_bitmap or old_bitmap == ctypes.c_void_p((-1)).value:
+            pm_rect = wintypes.RECT()
+            self.user32.GetWindowRect(capture_hwnd, ctypes.byref(pm_rect))
+            pm_w = max(0, pm_rect.right - pm_rect.left)
+            pm_h = max(0, pm_rect.bottom - pm_rect.top)
+            with self.window_dpi_context(capture_hwnd):
+                rect = wintypes.RECT()
+                if not self.user32.GetWindowRect(capture_hwnd, ctypes.byref(rect)):
+                    return None
+                win_w = rect.right - rect.left
+                win_h = rect.bottom - rect.top
+                if win_w <= 0 or win_h <= 0:
+                    return None
+                width = max(win_w, pm_w)
+                height = max(win_h, pm_h)
+                hwndDC = self.user32.GetWindowDC(capture_hwnd)
+                if not hwndDC:
+                    return None
+                mfcDC = self.gdi32.CreateCompatibleDC(hwndDC)
+                if not mfcDC:
+                    return None
+                hbitmap = self.gdi32.CreateCompatibleBitmap(hwndDC, width, height)
+                if not hbitmap:
+                    return None
+                old_bitmap = self.gdi32.SelectObject(mfcDC, hbitmap)
+                if not old_bitmap or old_bitmap == ctypes.c_void_p((-1)).value:
+                    old_bitmap = None
+                    return None
+                PW_RENDERFULLCONTENT = 2
+                if not self.user32.PrintWindow(capture_hwnd, mfcDC, PW_RENDERFULLCONTENT):
+                    return None
+                self.gdi32.SelectObject(mfcDC, old_bitmap)
                 old_bitmap = None
-                return None
-            PW_RENDERFULLCONTENT = 2
-            if not self.user32.PrintWindow(capture_hwnd, mfcDC, PW_RENDERFULLCONTENT):
-                return None
-            self.gdi32.SelectObject(mfcDC, old_bitmap)
-            old_bitmap = None
 
             class BITMAPINFOHEADER(ctypes.Structure):
                 _fields_ = [
@@ -408,7 +451,27 @@ matches no template and reads no text, so acting on one means clicking blind.
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
             else:
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            return frame if np.any(frame) else None
+            if not np.any(frame):
+                return None
+            if (pm_w > 0 and pm_h > 0) and (pm_w != win_w or pm_h != win_h):
+                small_w = min(win_w, pm_w)
+                small_h = min(win_h, pm_h)
+                # Check if PrintWindow rendered at the larger extent or only filled (small_w, small_h)
+                right_strip = frame[:small_h, small_w + 4:] if width > small_w + 4 else None
+                bottom_strip = frame[small_h + 4:, :small_w] if height > small_h + 4 else None
+                rendered_large = (right_strip is not None and np.any(right_strip)) or (bottom_strip is not None and np.any(bottom_strip))
+                if rendered_large:
+                    if width != win_w or height != win_h:
+                        interp = cv2.INTER_AREA if win_w < width else cv2.INTER_CUBIC
+                        frame = cv2.resize(frame, (win_w, win_h), interpolation=interp)
+                else:
+                    cropped = frame[:small_h, :small_w]
+                    if small_w != win_w or small_h != win_h:
+                        interp = cv2.INTER_AREA if win_w < small_w else cv2.INTER_CUBIC
+                        frame = cv2.resize(cropped, (win_w, win_h), interpolation=interp)
+                    else:
+                        frame = cropped
+            return frame
         except Exception as e:
             logger.error(f'Screenshot failed: {e}')
             return None

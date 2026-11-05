@@ -52,7 +52,9 @@ class InputService:
             class POINT(ctypes.Structure):
                 _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
             pt = POINT(xc, yc)
-            if not self.user32.ClientToScreen(hwnd, ctypes.byref(pt)):
+            with self.window_service.window_dpi_context(hwnd):
+                ok = self.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+            if not ok:
                 return (xc, yc)
             else:
                 return (int(pt.x), int(pt.y))
@@ -76,8 +78,9 @@ class InputService:
             return
         else:
             lparam = self._make_lparam(int(x), int(y))
-            self.user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-            self.user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+            with self.window_service.window_dpi_context(hwnd):
+                self.user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+                self.user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
     def click_at(self, x, y, rand=False):
         """Single mouse down/up at (x, y) with no delay (for chained clicks with custom timing)."""
         if rand:
@@ -90,20 +93,26 @@ class InputService:
         if not hwnd:
             return
         else:
-            self.user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, self._make_lparam(x, y))
+            lparam = self._make_lparam(x, y)
+            with self.window_service.window_dpi_context(hwnd):
+                self.user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
     def mouse_up(self, x, y):
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
         else:
-            self.user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, self._make_lparam(x, y))
+            lparam = self._make_lparam(x, y)
+            with self.window_service.window_dpi_context(hwnd):
+                self.user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
     def move(self, x, y, wparam=0):
         """WM_MOUSEMOVE. Use ``wparam=MK_LBUTTON`` only while simulating a held drag (see ``human_move``)."""
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
         else:
-            self.user32.SendMessageW(hwnd, WM_MOUSEMOVE, wparam, self._make_lparam(x, y))
+            lparam = self._make_lparam(x, y)
+            with self.window_service.window_dpi_context(hwnd):
+                self.user32.SendMessageW(hwnd, WM_MOUSEMOVE, wparam, lparam)
     def human_move(self, x1, y1, x2, y2, duration=0.5):
         # irreducible cflow, using cdg fallback
         """Simulates human-like mouse movement using a Bezier curve and easing."""
@@ -145,6 +154,7 @@ class InputService:
             wparam = delta << 16
             sx, sy = self._client_to_screen(x, y)
             lparam = self._make_wheel_lparam(sx, sy)
-            for _ in range(amount):
-                self.user32.SendMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
-                time.sleep(random.uniform(0.05, 0.2))
+            with self.window_service.window_dpi_context(hwnd):
+                for _ in range(amount):
+                    self.user32.SendMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+                    time.sleep(random.uniform(0.05, 0.2))
