@@ -69,7 +69,7 @@ class RunPage(QWidget):
         super().__init__(parent)
         self._controller = controller
         self._navigate_to = navigate_to
-        self._settings = QSettings('BasePilot', 'UI')
+        self._settings = QSettings('BaseLooter', 'UI')
         self._preset_buttons: list[tuple[int, object]] = []
         self._session_start_mono: Optional[float] = None
         self._log_tail_pos = 0

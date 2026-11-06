@@ -128,7 +128,7 @@ class LogsPage(QWidget):
         title_col.setSpacing(2)
         title_col.addWidget(PageTitle('Activity & Diagnostic Logs', parent=header_card))
         title_col.addWidget(
-            PageSubtitle('Live tail of basepilot.log with category & keyword filtering.', parent=header_card)
+            PageSubtitle('Live tail of baselooter.log with category & keyword filtering.', parent=header_card)
         )
         top_row.addLayout(title_col)
         top_row.addStretch()

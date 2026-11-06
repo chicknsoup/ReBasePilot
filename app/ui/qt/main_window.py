@@ -44,11 +44,11 @@ class MainWindow(QMainWindow):
         from app.utils.common import get_profile_name
 
         profile = get_profile_name()
-        self.setWindowTitle(f'BasePilot — {profile}' if profile else 'BasePilot')
+        self.setWindowTitle(f'BaseLooter — {profile}' if profile else 'BaseLooter')
         self.resize(*WINDOW_DEFAULT)
         self.setMinimumSize(*WINDOW_MIN)
 
-        self._settings = QSettings('BasePilot', f'UI-{profile}' if profile else 'UI')
+        self._settings = QSettings('BaseLooter', f'UI-{profile}' if profile else 'UI')
         self._migrate_legacy_ui_settings()
         self._controller = BotController(bot_version=__version__)
         self._taskbar = None
@@ -74,13 +74,13 @@ class MainWindow(QMainWindow):
 
         logo = QLabel()
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo.setPixmap(logo_pixmap(44))
+        logo.setPixmap(logo_pixmap(56))
         logo.setStyleSheet('border: none; background: transparent;')
         sidebar_col.addWidget(logo)
 
         brand = QLabel(
             f"<span style=\"color:{TOKENS['primary']}\">Base</span>"
-            f"<span style=\"color:{TOKENS['text']}\">Pilot</span>"
+            f"<span style=\"color:{TOKENS['gold']}\">Looter</span>"
         )
         brand.setObjectName('Brand')
         brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -123,20 +123,21 @@ class MainWindow(QMainWindow):
         self._restore_geometry()
 
     def _migrate_legacy_ui_settings(self):
-        """One-time QSettings migration from the pre-rebrand org name."""
+        """One-time QSettings migration from pre-rebrand org names."""
         if self._settings.contains('geometry'):
             return
-        legacy = QSettings('ClashAutoLoot', 'UI')
-        for key in [
-            'geometry',
-            'windowState',
-            'run/autoUpgrade',
-            'run/upgradeWalls',
-            'run/untilMaxed',
-            'run/minutes',
-        ]:
-            if legacy.contains(key):
-                self._settings.setValue(key, legacy.value(key))
+        for org_name in ('BasePilot', 'ClashAutoLoot'):
+            legacy = QSettings(org_name, 'UI')
+            for key in [
+                'geometry',
+                'windowState',
+                'run/autoUpgrade',
+                'run/upgradeWalls',
+                'run/untilMaxed',
+                'run/minutes',
+            ]:
+                if legacy.contains(key) and not self._settings.contains(key):
+                    self._settings.setValue(key, legacy.value(key))
 
     def _build_status_bar(self):
         bar = QStatusBar()

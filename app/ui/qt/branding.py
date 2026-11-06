@@ -1,40 +1,39 @@
-# Decompiled with PyLingual (https://pylingual.io)
-# Internal filename: 'app\\ui\\qt\\branding.py'
-# Bytecode version: 3.13.0rc3 (3571)
-# Source timestamp: 1970-01-01 00:00:00 UTC (0)
-
-"""App logo and window icon."""
+"""App logo and window icon for BaseLooter."""
 from __future__ import annotations
-global _ICON
+
 from PySide6.QtGui import QIcon, QPixmap
+
 from app.utils.common import get_resource_path
-_ICON: 'QIcon | None' = None
-LOGO_PNG = 'assets/basepilot_logo.png'
-LOGO_ICO = 'assets/basepilot_logo.ico'
-def app_icon():
+
+_ICON: QIcon | None = None
+LOGO_PNG = 'assets/baselooter_logo.png'
+LOGO_ICO = 'assets/baselooter_logo.ico'
+_FALLBACK_PNG = 'assets/basepilot_logo.png'
+_FALLBACK_ICO = 'assets/basepilot_logo.ico'
+
+
+def app_icon() -> QIcon:
     """Return the cached application icon (ICO preferred on Windows)."""
     global _ICON
     if _ICON is None:
-        ico = get_resource_path(LOGO_ICO)
-        png = get_resource_path(LOGO_PNG)
-        if ico.is_file():
-            _ICON = QIcon(str(ico))
-            return _ICON
-        else:
-            if png.is_file():
-                _ICON = QIcon(str(png))
+        for rel in (LOGO_ICO, LOGO_PNG, _FALLBACK_ICO, _FALLBACK_PNG):
+            path = get_resource_path(rel)
+            if path.is_file():
+                _ICON = QIcon(str(path))
                 return _ICON
-            else:
-                _ICON = QIcon()
+        _ICON = QIcon()
     return _ICON
-def logo_pixmap(size=48):
+
+
+def logo_pixmap(size: int = 48) -> QPixmap:
     """Square logo pixmap for in-app branding (sidebar header, etc.)."""
     icon = app_icon()
     if icon.isNull():
         return QPixmap()
-    else:
-        return icon.pixmap(size, size)
-def apply_app_icon(widget):
+    return icon.pixmap(size, size)
+
+
+def apply_app_icon(widget) -> None:
     """Set the app logo on any QWidget with a title bar (QApplication, QMainWindow, QDialog)."""
     icon = app_icon()
     if not icon.isNull():

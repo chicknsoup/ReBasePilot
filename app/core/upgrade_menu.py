@@ -170,13 +170,13 @@ def _parse_build_cards(frame, layout, initial_section, batch_labels=False, targe
             label_words = VisionService.find_words_ocr(frame, region=(int(cx + cw * 0.15), cy + 4, int(cw * 0.55), int(ch * 0.45)), white_text=True, brightness_floor=210, roi_upscale=3, tesseract_config='--psm 7') or []
         else:
             label_words = [word for word in batch_words if cy + 4 <= word.top + word.height / 2 <= cy + 4 + int(ch * 0.45)]
-        label_words = [w for w in label_words if re.search('[A-Za-z]', w.text)]
+        label_words = [w for w in label_words if re.search('[A-Za-z0-9]', w.text)]
         label_lines = _collect_label_lines(label_words)
         if not label_lines:
             continue
         name_line = label_lines[0]
         label = _line_text(name_line)
-        if _match_section_header(label) or not any((len(t) >= 4 for t in label.split())):
+        if _match_section_header(label) or not any((len(t) >= 4 and re.search('[A-Za-z]', t) for t in label.split())):
             continue
         if target is not None:
             compact = lambda value: ''.join((c.lower() for c in value if c.isalnum()))

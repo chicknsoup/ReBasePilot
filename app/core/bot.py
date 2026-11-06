@@ -3,6 +3,7 @@
 # Bytecode version: 3.13.0rc3 (3571)
 # Source timestamp: 1970-01-01 00:00:00 UTC (0)
 
+import re
 import time
 from app.core.battle_rewards import BattleRewards
 from app.core.ui_navigation import find_battle_button, find_navigation_fallback, find_ui_label, is_village_hud
@@ -364,6 +365,18 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
             return None
         except:
             self.input.mouse_up(x2, y2)
+    @staticmethod
+    def _extract_wall_count_from_text(text):
+        """Parse remaining wall count from a builder row label like 'Wall x 149' or 'Wall x149'."""
+        if not text:
+            return None
+        m = re.search(r'(?i)(?:\bx\s*|\bwall\s+[x×]?\s*)(\d{1,3})\b', str(text))
+        if m:
+            val = int(m.group(1))
+            if 1 <= val <= 500:
+                return val
+        return None
+
     def _find_wall_row_once(self):
         """One fresh screenshot → Wall label OCR, both polarities (dark popup text first).\n\nReturns ``(frame, point)``; the frame comes back so the caller can tell a list\nthat is still travelling from one that has hit its bottom without paying for a\nsecond capture.\n"""
         frame = self.window.screenshot()
@@ -379,12 +392,31 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
                     if is_wall_row(row) and row.section != 'in_progress':
                         if row.cost is not None:
                             self._last_wall_unit_cost = int(row.cost)
+                        cnt = self._extract_wall_count_from_text(row.label)
+                        self._last_wall_remaining = cnt if cnt is not None else 1
                         return (frame, row.center)
                 return (frame, None)
             else:
+                fh, fw = frame.shape[:2]
                 for white in [False, True]:
                     pt = VisionService.find_wall_labels_top_center_ocr(frame, white_text=white, cc_filter_blobs=False)
                     if pt:
+                        wx, wy = pt
+                        rx = max(0, int(wx - fw * 0.04))
+                        ry = max(0, int(wy - fh * 0.022))
+                        rw = min(fw - rx, int(fw * 0.14))
+                        rh = min(fh - ry, int(fh * 0.044))
+                        words = VisionService.find_words_ocr(
+                            frame,
+                            region=(rx, ry, rw, rh),
+                            white_text=white,
+                            roi_upscale=3,
+                            tesseract_config='--psm 7',
+                        ) or []
+                        line_txt = ' '.join(w.text for w in sorted(words, key=lambda b: b.left))
+                        cnt = self._extract_wall_count_from_text(line_txt)
+                        if cnt is not None:
+                            self._last_wall_remaining = cnt
                         return (frame, pt)
                 return (frame, None)
     def _wall_menu_signature(self, frame):
@@ -472,8 +504,9 @@ deselect, which would eat the upcoming Attack click.'''
             return None
         else:
             cb = getattr(self, '_status_callback', None)
+            prev_rem = getattr(self, '_last_wall_remaining', None)
             if cb:
-                cb('Upgrading walls...')
+                cb(f'Upgrading walls ({prev_rem})...' if prev_rem is not None else 'Upgrading walls...')
             if getattr(self, '_last_hud_triplet', None) is None:
                 self._refresh_home_resources()
             for attempt in range(2):
@@ -836,7 +869,19 @@ deselect, which would eat the upcoming Attack click.'''
                         ox, oy = self.vision.find_template(frame, 'okay.png')
                         if ox:
                             self.input.click(ox, oy, pause=0.3, rand=False)
-                            logger.info('Wall upgrade batch confirmed')
+                            rem = getattr(self, '_last_wall_remaining', None)
+                            if rem is not None and rem > 0:
+                                self._last_wall_remaining = rem - 1
+                                rem = self._last_wall_remaining
+                            logger.info(
+                                'Wall upgrade confirmed%s',
+                                f' ({rem} walls remaining)' if rem is not None else '',
+                            )
+                            cb = getattr(self, '_status_callback', None)
+                            if cb and rem is not None:
+                                cb(f'Upgraded wall ({rem} remaining)')
+                            if rem is not None:
+                                self._emit_state(note=f'Wall upgraded ({rem} left)')
     def _wall_batch_state(self, polls=_WALL_POPUP_SETTLE_POLLS):
         """Fresh frame plus its cost-button reading, once the batch popup is readable.\n\nReturns ``(frame, pair)``, or ``(frame, None)`` when the popup stayed unreadable.\n\nOne frame is not evidence. The popup animates for around a second after every add\nor remove, and its cost icons do not match while it does — so treating the first\nunreadable frame as \"the popup is closed\" ended batches one frame after a\nsuccessful add and threw the whole batch away unconfirmed (live repro: \"cost\nbuttons not visible — popup not open\" immediately after \"1 wall(s) added\").\n"""
         frame = None
@@ -968,8 +1013,18 @@ deselect, which would eat the upcoming Attack click.'''
             if found:
                 if candidate and abs(found[1] - candidate[1]) <= self.config.scale_scalar(_WALL_ROW_STABLE_TOL):
                     wall_pt = found
-                    if scrolls:
-                        logger.info('Wall upgrade: Wall row found after %d scroll nudge(s)', scrolls)
+                    rem = getattr(self, '_last_wall_remaining', None)
+                    logger.info(
+                        'Wall upgrade: Wall row found%s%s',
+                        f' ({rem} remaining)' if rem is not None else '',
+                        f' after {scrolls} scroll nudge(s)' if scrolls else '',
+                    )
+                    if rem is not None:
+                        msg = f'Upgrading walls ({rem})...'
+                        cb = getattr(self, '_status_callback', None)
+                        if cb:
+                            cb(msg)
+                        self._emit_state(state=msg, note=f'Wall ({rem} remaining)')
                     break
                 candidate = found
                 if self.stop_event.wait(0.25):
@@ -2225,6 +2280,7 @@ deselect, which would eat the upcoming Attack click.'''
                         self._upgrade_retry_pending = False
                         self._auto_upgrade_last_scan = 0
                         self._inventory_prev = self._last_hud_triplet = None
+                        self._last_wall_remaining = None
                         self._gold_pinned = self._elixir_pinned = False
     def _wake_home_and_wait_for_attack(self, timeout=30):
         """\nAfter switching accounts: dismiss idle UI, then poll the **top half** for village type\n(``mbuilder.png`` = Builder Base; ``builder.png`` or ``gbuilder.png`` = Home Village). If Builder Base,\nleave via :meth:`_leave_builder_base_with_nboat`. When Home Village is detected, return\n``attack.png`` coordinates from the **bottom half** (battle bar) once visible — same\ntemplate as :meth:`_find_match_and_attack` uses to start battles.\nEach iteration dismisses ``okay.png`` / ``exit.png`` if present, then village / attack logic; else nudge.\n"""
