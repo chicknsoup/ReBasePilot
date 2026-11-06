@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import List, Optional, Tuple
 from types import SimpleNamespace
-from app.utils.common import get_resource_path
+from app.utils.common import get_resource_path, get_template_path
 from app.config import ASPECT_16_10, ASPECT_16_9
 from app.core.upgrade_menu import SECTION_IN_PROGRESS, detect_build_menu, UpgradeRow, merge_rows, parse_builder_chip, parse_builder_menu
 from app.core.upgrade_policy import MODE_MAXER, MODE_RUSHER, UpgradePolicy, can_pay, choose_upgrade
@@ -197,6 +197,13 @@ class UpgradeAdvisor:
         if frame is None:
             return False
         else:
+            for tpl_reload in ('reload_game.png', 'try_again.png', 'reload.png'):
+                if get_template_path(tpl_reload).exists():
+                    rx, ry = self.vision.find_template(frame, tpl_reload)
+                    if rx:
+                        logger.warning('Upgrade advisor: disconnect/reload dialog (%s) visible — clicking (%d, %d)', tpl_reload, rx, ry)
+                        self.input.click(rx, ry, pause=1.0)
+                        return False
             tab = find_buildings_tab(frame, self.vision)
             if tab[0] is not None:
                 if detect_build_menu(frame) is None:

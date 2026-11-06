@@ -454,6 +454,15 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
         '''Tap empty ground to close the wall selection bar / gem dialog remnants. The wall
 bar has no X button — while it is open, the next tap anywhere is swallowed by the
 deselect, which would eat the upcoming Attack click.'''
+        frame = self.window.screenshot()
+        if frame is not None and getattr(frame, 'size', 0) > 0:
+            self._update_config_size(frame)
+            rkind, rlx, rly = self._find_reload_button(frame)
+            if rlx:
+                logger.warning('Wall upgrade cleanup: reload dialog (%s) detected — clicking (%d, %d)', rkind, rlx, rly)
+                self.input.click(rlx, rly, pause=1.0)
+                self._wait_for_village_after_reload()
+                return
         self._dismiss_open_popup()
         self.input.click(pause = 0.35, *self.config.get_point('empty'))
         self._dismiss_open_popup()
@@ -1068,14 +1077,19 @@ deselect, which would eat the upcoming Attack click.'''
     def _find_reload_button(self, frame):
         """Return ``(kind, x, y)`` when a reload dialog is visible, or ``(None, None, None)``.
         ``reload_game.png`` is the Google Play Games inactivity dialog ('Anyone there? You have
-        been disconnected due to inactivity. RELOAD GAME'), which should be clicked immediately.
-        ``reload.png`` is the legacy connection-lost button."""
+        been disconnected due to inactivity. RELOAD GAME') and ``try_again.png`` is the server
+        disconnect dialog ('Connection lost... TRY AGAIN'); both should be clicked immediately.
+        ``reload.png`` is the legacy connection-lost / another-device button."""
         if frame is None or getattr(frame, 'size', 0) == 0:
             return (None, None, None)
         if get_template_path('reload_game.png').exists():
             lx, ly = self.vision.find_template(frame, 'reload_game.png')
             if lx:
                 return ('inactivity', lx, ly)
+        if get_template_path('try_again.png').exists():
+            lx, ly = self.vision.find_template(frame, 'try_again.png')
+            if lx:
+                return ('try_again', lx, ly)
         if get_template_path('reload.png').exists():
             lx, ly = self.vision.find_template(frame, 'reload.png')
             if lx:
@@ -2088,8 +2102,8 @@ deselect, which would eat the upcoming Attack click.'''
                 continue
             rkind, lx, ly = self._find_reload_button(frame)
             if lx:
-                if rkind == 'inactivity':
-                    logger.warning('Recovery: inactivity dialog detected — clicking RELOAD GAME immediately')
+                if rkind in ('inactivity', 'try_again'):
+                    logger.warning('Recovery: %s dialog detected — clicking immediately', rkind)
                     self.input.click(lx, ly, pause=1.0)
                     self._reload_first_seen = None
                     if not self._wait_for_village_after_reload() and self.stop_event.is_set():
