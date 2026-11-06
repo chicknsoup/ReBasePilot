@@ -49,7 +49,7 @@ _STAR_BONUS_THRESHOLD = 0.75
 _TROOP_FAILURE_LIMIT = 4
 _TROOP_RETRY_WAIT_SECONDS = 15
 _RELOAD_GRACE_SECONDS = 180
-_WALL_BATCH_MAX_ADDS = 15
+_WALL_BATCH_MAX_ADDS = 0
 _WALL_MENU_SCROLL_STEPS = 20
 _WALL_MENU_BOTTOM_DIFF = 4.0
 _WALL_MENU_OPEN_SECONDS = 1.2
@@ -797,15 +797,21 @@ deselect, which would eat the upcoming Attack click.'''
                                 self._update_config_size(frame)
                                 pair = VisionService.upgrade_cost_redness_by_resource_icons(frame)
                 picked = False
-                if pair.elixir.redness < 0.2 and pair.elixir.cost_roi_xywh and pair.elixir.center:
-                    logger.info('Wall upgrade: paying with elixir (redness %.2f)', pair.elixir.redness)
-                    self.input.click(*pair.elixir.center, pause=0.3, rand=False)
-                    picked = True
-                else:
-                    if pair.gold.redness < 0.2 and pair.gold.cost_roi_xywh and pair.gold.center:
-                                logger.info('Wall upgrade: paying with gold (redness %.2f)', pair.gold.redness)
-                                self.input.click(*pair.gold.center, pause=0.3, rand=False)
-                                picked = True
+                hud_pair = getattr(self, '_last_wall_hud', None)
+                if hud_pair is None and getattr(self, '_last_hud_triplet', None) is not None:
+                    hud_pair = self._last_hud_triplet[:2]
+                prefer_gold = bool(hud_pair is not None and int(hud_pair[0] or 0) > int(hud_pair[1] or 0))
+                slots = (
+                    (('gold', pair.gold), ('elixir', pair.elixir))
+                    if prefer_gold
+                    else (('elixir', pair.elixir), ('gold', pair.gold))
+                )
+                for res_name, slot in slots:
+                    if slot.redness < 0.2 and slot.cost_roi_xywh and slot.center:
+                        logger.info('Wall upgrade: paying with %s (redness %.2f)', res_name, slot.redness)
+                        self.input.click(*slot.center, pause=0.3, rand=False)
+                        picked = True
+                        break
                 frame = self.window.screenshot()
                 if frame is None:
                     return
@@ -887,14 +893,13 @@ deselect, which would eat the upcoming Attack click.'''
         else:
             return any((float(np.mean(np.abs(a - b))) >= _WALL_COST_CHANGE_DIFF for b, a in zip(before, after)))
     def _wait_for_wall_batch_popup(self, polls=_WALL_POPUP_SETTLE_POLLS):
-        """True once the batch popup is up, judged by its Add Wall button."""
+        """True once the wall upgrade cost buttons are visible."""
         frame = None
         for _ in range(max(1, int(polls))):
             self._check_stop()
             frame, pair = self._wall_batch_state(polls=1)
             if frame is not None and pair is not None:
-                strip = self._wall_button_strip_roi(frame, pair)
-                if VisionService.find_active_addwall(frame, region=strip)[0]:
+                if pair.gold.cost_roi_xywh or pair.elixir.cost_roi_xywh:
                     return True
             if self.stop_event.wait(0.4):
                 return False
@@ -1033,45 +1038,8 @@ deselect, which would eat the upcoming Attack click.'''
             return
         if self.stop_event.wait(_WALL_POPUP_ANIMATION_SECONDS):
             return
-        added = 0
-        max_adds = _WALL_BATCH_MAX_ADDS
-        unit_cost = getattr(self, '_last_wall_unit_cost', None)
-        hud_pair = getattr(self, '_last_wall_hud', None)
-        if hud_pair is None and getattr(self, '_last_hud_triplet', None) is not None:
-            hud_pair = self._last_hud_triplet[:2]
-        if unit_cost and unit_cost > 0 and hud_pair is not None:
-            best_budget = max(int(hud_pair[0] or 0), int(hud_pair[1] or 0))
-            if best_budget > 0:
-                budget_adds = max(0, best_budget // int(unit_cost) - 1)
-                max_adds = min(max_adds, budget_adds)
-                logger.info('Wall upgrade: unit_cost=%s, max_budget=%s -> max additional walls=%d (batch=%d)', unit_cost, best_budget, max_adds, max_adds + 1)
-        for _ in range(max_adds):
-            self._check_stop()
-            frame, pair = self._wall_batch_state()
-            if pair is None:
-                logger.info('Wall upgrade: batch popup unreadable after %d polls — stopping batch', _WALL_POPUP_SETTLE_POLLS)
-                _dump_debug_frame(frame, 'wallbatch')
-                break
-            if pair.gold.redness >= 0.2 and pair.elixir.redness >= 0.2:
-                break
-            strip_roi = self._wall_button_strip_roi(frame, pair)
-            frame, pair, ok = self._add_one_wall(frame, pair, strip_roi)
-            if not ok:
-                break
-            added += 1
         self._check_stop()
-        frame, pair = self._wall_batch_state()
-        if pair is None:
-            logger.info('Wall upgrade: batch popup unreadable before confirming — dismissing')
-            _dump_debug_frame(frame, 'wallbatch')
-            self._deselect_wall_ui()
-            return
-        mid_roi = self._wall_button_strip_roi(frame, pair)
-        if pair.gold.redness >= 0.2 and pair.elixir.redness >= 0.2:
-            frame, pair = self._remove_one_wall(frame, pair, mid_roi, 'unaffordable on both resources')
-        elif added > 1 and pair.elixir.redness >= 0.2 and pair.gold.redness < 0.2 and pair.gold.cost_roi_xywh:
-            frame, pair = self._remove_one_wall(frame, pair, mid_roi, 'gold is the payer — keeping the attack entry fee')
-        logger.info('Wall upgrade: %d wall(s) added to batch', added)
+        logger.info('Wall upgrade: upgrading 1 wall (single-wall mode)')
         self._upgrade_walls_pick_resource_and_okay()
         return True
     def _find_reload_button(self, frame):
