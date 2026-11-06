@@ -6,7 +6,7 @@
 """Run page — attack, schedule, modes, live status, controls."""
 from __future__ import annotations
 from typing import Callable, List, Optional
-from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer
 from PySide6.QtWidgets import QButtonGroup, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QScrollArea, QSpinBox, QVBoxLayout, QWidget
 from app.config import check_game_window_aspect_for_start
 from app.ui.qt._constants import ATTACK_STRATEGIES, BUILDER_BASE_ATTACK_STRATEGIES, BUILDER_BASE_ATTACK_STRATEGIES_UNDER_DEV, BUILDER_BASE_PRIORITISE_LABELS
@@ -138,11 +138,14 @@ class RunPage(QWidget):
         dur_row.addWidget(self._duration_label)
         self._minutes_spin = QSpinBox()
         self._minutes_spin.setObjectName('DurationSpin')
-        self._minutes_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._minutes_spin.setRange(1, 999)
         self._minutes_spin.setValue(15)
-        self._minutes_spin.setFixedSize(56, 28)
+        self._minutes_spin.setFixedSize(64, 28)
         self._minutes_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._minutes_editor = self._minutes_spin.lineEdit()
+        self._minutes_spin.installEventFilter(self)
+        if self._minutes_editor is not None:
+            self._minutes_editor.installEventFilter(self)
         step_col = QVBoxLayout()
         step_col.setSpacing(2)
         step_col.setContentsMargins(0, 0, 0, 0)
@@ -402,9 +405,24 @@ class RunPage(QWidget):
             return None
     def _duration_locked(self):
         return self._star_bonus.isChecked() or self._until_maxed.isChecked()
+    def _unlock_duration(self):
+        if self._star_bonus.isChecked():
+            self._star_bonus.setChecked(False)
+        if self._until_maxed.isChecked():
+            self._until_maxed.setChecked(False)
+        self._update_duration_enabled()
+    def eventFilter(self, watched, event):
+        try:
+            if watched is getattr(self, '_minutes_spin', None) or watched is getattr(self, '_minutes_editor', None):
+                if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn, QEvent.Type.KeyPress, QEvent.Type.Wheel):
+                    if self._duration_locked():
+                        self._unlock_duration()
+        except RuntimeError:
+            pass
+        return super().eventFilter(watched, event)
     def _step_minutes(self, delta):
         if self._duration_locked():
-            return None
+            self._unlock_duration()
         if delta > 0:
             self._minutes_spin.stepUp()
         else:
@@ -413,17 +431,18 @@ class RunPage(QWidget):
         QTimer.singleShot(0, self._clear_minutes_selection)
     def _set_minutes(self, value):
         if self._duration_locked():
-            return None
+            self._unlock_duration()
         self._minutes_spin.setValue(value)
         self._clear_minutes_selection()
     def _update_duration_enabled(self):
         enabled = not self._duration_locked()
-        duration_widgets = (self._duration_label, self._minutes_spin, self._btn_spin_up, self._btn_spin_down, self._minutes_unit, self._btn_5m, self._btn_10m, self._btn_20m)
-        for widget in duration_widgets:
-            widget.setEnabled(enabled)
+        self._duration_label.setEnabled(enabled)
+        btn_hide = 'QSpinBox::up-button, QSpinBox::down-button { width: 0px; height: 0px; border: none; }'
         if enabled:
+            self._minutes_spin.setStyleSheet(btn_hide)
             self._minutes_unit.setStyleSheet(f'''color: {TOKENS['text_muted']};''')
             return None
+        self._minutes_spin.setStyleSheet(f'''{btn_hide} QSpinBox {{ color: {TOKENS['text_faint']}; }}''')
         self._minutes_unit.setStyleSheet('color: #4a5568;')
     def _on_star_bonus_toggle(self, checked):
         if checked and getattr(self, '_until_maxed', None) is not None and self._until_maxed.isChecked():

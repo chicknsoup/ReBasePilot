@@ -1280,12 +1280,7 @@ Returns:
                 return words
             except pytesseract.TesseractNotFoundError:
                 VisionService._log_tesseract_missing()
-                
-                try:
-                    return None
-                except (ValueError, TypeError):
-                    []
-                    conf = -1
+                return []
 
 
 

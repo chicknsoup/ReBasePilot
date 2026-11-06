@@ -63,6 +63,16 @@ class InputService:
         sx = int(screen_x) & 65535
         sy = int(screen_y) & 65535
         return sy << 16 | sx
+    def _send_msg(self, hwnd, msg, wparam, lparam):
+        SMTO_ABORTIFHUNG = 0x0002
+        result = ctypes.c_ulonglong(0)
+        with self.window_service.window_dpi_context(hwnd):
+            if hasattr(self.user32, 'SendMessageTimeoutW'):
+                self.user32.SendMessageTimeoutW(
+                    hwnd, msg, wparam, lparam, SMTO_ABORTIFHUNG, 2000, ctypes.byref(result)
+                )
+            else:
+                self.user32.SendMessageW(hwnd, msg, wparam, lparam)
     def click(self, x, y, pause=1, rand=True):
         """Performs a click with optional randomization and delay."""
         if rand:
@@ -70,17 +80,19 @@ class InputService:
             x += random.randint(-spread, spread)
             y += random.randint(-spread, spread)
         self._inject_click(x, y)
-        sleep_time = random.uniform(pause - pause * 0.2, pause + pause * 0.2)
-        time.sleep(max(0.1, sleep_time))
+        sleep_time = max(0.1, random.uniform(pause - pause * 0.2, pause + pause * 0.2))
+        if self.stop_event is not None:
+            self.stop_event.wait(sleep_time)
+        else:
+            time.sleep(sleep_time)
     def _inject_click(self, x, y):
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
         else:
             lparam = self._make_lparam(int(x), int(y))
-            with self.window_service.window_dpi_context(hwnd):
-                self.user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-                self.user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+            self._send_msg(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+            self._send_msg(hwnd, WM_LBUTTONUP, 0, lparam)
     def click_at(self, x, y, rand=False):
         """Single mouse down/up at (x, y) with no delay (for chained clicks with custom timing)."""
         if rand:
@@ -94,16 +106,14 @@ class InputService:
             return
         else:
             lparam = self._make_lparam(x, y)
-            with self.window_service.window_dpi_context(hwnd):
-                self.user32.SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+            self._send_msg(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
     def mouse_up(self, x, y):
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
         else:
             lparam = self._make_lparam(x, y)
-            with self.window_service.window_dpi_context(hwnd):
-                self.user32.SendMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+            self._send_msg(hwnd, WM_LBUTTONUP, 0, lparam)
     def move(self, x, y, wparam=0):
         """WM_MOUSEMOVE. Use ``wparam=MK_LBUTTON`` only while simulating a held drag (see ``human_move``)."""
         hwnd = self.window_service.hwnd
@@ -111,8 +121,7 @@ class InputService:
             return
         else:
             lparam = self._make_lparam(x, y)
-            with self.window_service.window_dpi_context(hwnd):
-                self.user32.SendMessageW(hwnd, WM_MOUSEMOVE, wparam, lparam)
+            self._send_msg(hwnd, WM_MOUSEMOVE, wparam, lparam)
     def human_move(self, x1, y1, x2, y2, duration=0.5):
         # irreducible cflow, using cdg fallback
         """Simulates human-like mouse movement using a Bezier curve and easing."""
@@ -154,7 +163,13 @@ class InputService:
             wparam = delta << 16
             sx, sy = self._client_to_screen(x, y)
             lparam = self._make_wheel_lparam(sx, sy)
-            with self.window_service.window_dpi_context(hwnd):
-                for _ in range(amount):
-                    self.user32.SendMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
-                    time.sleep(random.uniform(0.05, 0.2))
+            for _ in range(amount):
+                if self.stop_event and self.stop_event.is_set():
+                    break
+                self._send_msg(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+                wait_s = random.uniform(0.05, 0.2)
+                if self.stop_event:
+                    if self.stop_event.wait(wait_s):
+                        break
+                else:
+                    time.sleep(wait_s)

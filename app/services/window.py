@@ -471,6 +471,10 @@ matches no template and reads no text, so acting on one means clicking blind.
                         frame = cv2.resize(cropped, (win_w, win_h), interpolation=interp)
                     else:
                         frame = cropped
+            dims = (pm_w, pm_h, win_w, win_h, frame.shape[1], frame.shape[0])
+            if getattr(WindowService, '_last_capture_dims', None) != dims:
+                WindowService._last_capture_dims = dims
+                logger.info('Capture geometry: pm=%dx%d win_dpi=%dx%d frame=%dx%d', *dims)
             return frame
         except Exception as e:
             logger.error(f'Screenshot failed: {e}')

@@ -215,6 +215,11 @@ QSpinBox#DurationSpin {{
     max-height: 28px;
     padding: 2px 6px;
 }}
+QSpinBox#DurationSpin::up-button, QSpinBox#DurationSpin::down-button {{
+    width: 0px;
+    height: 0px;
+    border: none;
+}}
 QSpinBox:disabled, QSpinBox#DurationSpin:disabled {{
     color: {t['text_faint']};
     background-color: {t['surface']};
@@ -287,7 +292,7 @@ QListWidget#Sidebar::item:selected {{
     background-color: {t['surface_hi']};
     border-left: 3px solid {t['primary']};
     color: {t['text']};
-    font-weight: 600;
+    font-weight: bold;
 }}
 QListWidget#Sidebar::item:hover:!selected {{
     background-color: {t['surface']};

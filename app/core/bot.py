@@ -104,6 +104,16 @@ class Bot:
         self._inventory_prev = None
         self._loot_session_start_mono = 0
         self._loot_callback = None
+    def bind_stop_event(self, event):
+        """Bind a fresh stop event for a new run session across all subsystems."""
+        self.stop_event = event
+        self.input.stop_event = event
+        self._battle_rewards.stop_event = event
+        VisionService._stop_event = event
+        if getattr(self, '_advisor', None) is not None:
+            self._advisor.stop_event = event
+        if getattr(self, '_research_advisor', None) is not None:
+            self._research_advisor.stop_event = event
     def start(self, method, run_time_minutes, star_bonus=False, status_callback=None, loot_callback=None, multi_run_players=None, ranked_fill=False, upgrade_walls=False, earthquake_method=EARTHQUAKE_METHOD_CURVE, builder_base=False, loot_prioritise='both', wall_upgrade_threshold=0, auto_upgrade=MODE_OFF, reserve_builders=1, state_callback=None, upgrade_order=None, clan_options=None, loot_filter=None):
         """Starts the bot loop. With ``multi_run_players``, runs a full session per enabled player.\n``run_time_minutes <= 0`` (single Home Village runs only) means UNLIMITED — farm,\nupgrade and idle until the user stops the bot (\"run until maxed\")."""
         self._status_callback = status_callback
@@ -1082,6 +1092,10 @@ deselect, which would eat the upcoming Attack click.'''
             frame = self.window.screenshot()
             if frame is not None and getattr(frame, 'size', 0) > 0:
                 self._update_config_size(frame)
+                rkind, rlx, rly = self._find_reload_button(frame)
+                if rlx:
+                    self.input.click(rlx, rly, pause=1.0)
+                    continue
                 self._dismiss_okay_or_exit_on_frame(frame)
                 bot_roi = VisionService.bottom_half_region(frame)
                 ax, _ = self.vision.find_template(frame, 'attack.png', region=bot_roi)
@@ -1102,6 +1116,14 @@ deselect, which would eat the upcoming Attack click.'''
         whole night) must be CLAIMED before its X works ("Claim reward first!"), so the
         green Claim button outranks its grey X; both have their own art (exit.png does
         not match).'''
+        if get_template_path('rankedattackconfirm.png').exists():
+            rx, ry = self.vision.find_template(frame, 'rankedattackconfirm.png')
+            if rx:
+                h, w = frame.shape[:2]
+                cancel_x = max(10, min(w - 10, w - int(rx)))
+                logger.info('Dismissing Confirm Attack modal via Cancel at (%d, %d)', cancel_x, int(ry))
+                self.input.click(cancel_x, int(ry), pause=0.25)
+                return True
         names = ['okay.png', 'exit.png']
         for extra in ('claim_btn.png', 'dailyreward_x.png', 'needgold_x.png', 'panel_x.png'):
             if get_template_path(extra).exists():
@@ -1515,14 +1537,70 @@ deselect, which would eat the upcoming Attack click.'''
         self._bb_dismiss_okay_and_return_home(retry_battle_template = 'surrender.png')
 
 
+    def _select_battle_mode_button(self, frame, battle_template, ranked_fill=False):
+        """Select the 'Find a Match' button for regular Battle vs Ranked Battle.
+
+        Because templates/16_9/farmbattle.png and templates/16_10/farmbattle.png
+        only crop the orange 'Find a Match' button text, both the regular Battle
+        card (left) and Ranked Battle card (right/middle when tournament attacks
+        are available) match farmbattle.png with nearly identical scores. When
+        multiple 'Find a Match' buttons are visible on the Multiplayer screen:
+        - regular farming (ranked_fill=False) is the leftmost 'Find a Match' button.
+        - Ranked Battle (ranked_fill=True) is the rightmost 'Find a Match' button.
+        """
+        if frame is None or getattr(frame, 'size', 0) == 0:
+            return (None, None)
+        self._update_config_size(frame)
+        bot_roi = VisionService.bottom_half_region(frame)
+        centers = VisionService.find_all_template_centers(
+            frame,
+            'farmbattle.png',
+            threshold=0.78,
+            region=bot_roi,
+            max_matches=4,
+            suppress_pad_frac=0.35,
+        )
+        if len(centers) >= 2:
+            centers_sorted = sorted(centers, key=lambda pt: pt[0])
+            chosen = centers_sorted[-1] if ranked_fill else centers_sorted[0]
+            logger.info(
+                'Battle selection: %d Find-a-Match buttons %s -> picking %s (ranked_fill=%s)',
+                len(centers_sorted),
+                centers_sorted,
+                chosen,
+                ranked_fill,
+            )
+            return chosen
+        search_region = self._search_region_for_template(frame, battle_template, None, None, 200)
+        return self._match_ui_control(frame, battle_template, region=search_region)
+
+    def _wait_for_battle_mode_button(self, battle_template, ranked_fill=False, timeout=12):
+        """Poll for the Battle Selection 'Find a Match' button and disambiguate Battle vs Ranked Battle."""
+        fx, fy = self._wait_for_image(battle_template, timeout=timeout, error=False)
+        if not fx:
+            return (None, None)
+        frame = self.window.screenshot()
+        if frame is not None and getattr(frame, 'size', 0) > 0:
+            sx, sy = self._select_battle_mode_button(frame, battle_template, ranked_fill=ranked_fill)
+            if sx:
+                return (sx, sy)
+        return (fx, fy)
+
     def _find_match_and_attack(self, method_id, ranked_fill=False):
-        """One attack cycle. Returns ``\'ranked_limit\'`` (stop now), ``\'troop\'`` (troops missing — retry later), or None."""
+        """One attack cycle. Returns ``'ranked_limit'`` (stop now), ``'troop'`` (troops missing — retry later), or None."""
         battle_template = 'rankedbattle.png' if ranked_fill else 'farmbattle.png'
         frame0 = self.window.screenshot()
         if frame0 is not None and getattr(frame0, 'size', 0) > 0:
             self._update_config_size(frame0)
-            ax0, _ = self.vision.find_template(frame0, 'attack.png', region=VisionService.bottom_half_region(frame0))
-            fx, fy = (None, None) if ax0 else self.vision.find_template(frame0, battle_template)
+            if self._dismiss_okay_or_exit_on_frame(frame0):
+                self.stop_event.wait(0.3)
+                frame0 = self.window.screenshot()
+                if frame0 is not None and getattr(frame0, 'size', 0) > 0:
+                    self._update_config_size(frame0)
+            ax0, _ = (None, None)
+            if frame0 is not None and getattr(frame0, 'size', 0) > 0:
+                ax0, _ = self.vision.find_template(frame0, 'attack.png', region=VisionService.bottom_half_region(frame0))
+            fx, fy = (None, None) if ax0 else self._select_battle_mode_button(frame0, battle_template, ranked_fill=ranked_fill)
         else:
             fx, fy = (None, None)
         if fx:
@@ -1533,7 +1611,7 @@ deselect, which would eat the upcoming Attack click.'''
                 return 'no_attack'
             self._refresh_home_resources()
             self.input.click(ax, ay, pause=0.6)
-            fx, fy = self._wait_for_image(battle_template, timeout=12, error=False)
+            fx, fy = self._wait_for_battle_mode_button(battle_template, ranked_fill=ranked_fill, timeout=12)
             for _ in range(3):
                 if fx:
                     break
@@ -1555,7 +1633,7 @@ deselect, which would eat the upcoming Attack click.'''
                         logger.info('attack.png still on screen — click was eaten (popup/selection?); tapping empty and re-clicking')
                         self.input.click(*self.config.get_point('empty'), pause=0.15)
                         self.input.click(rax, ray, pause=0.6)
-                fx, fy = self._wait_for_image(battle_template, timeout=10, error=False)
+                fx, fy = self._wait_for_battle_mode_button(battle_template, ranked_fill=ranked_fill, timeout=10)
         if not fx:
             logger.warning('Battle mode button (%s) not recognized after clicking Attack — recovering to Home screen instead of crashing', battle_template)
             self._dismiss_open_popup()
@@ -1569,21 +1647,24 @@ deselect, which would eat the upcoming Attack click.'''
                 if cb:
                     cb(msg)
                 return 'ranked_limit'
-        self.input.click(fx, fy, pause=0.1)
+        self.input.click(fx, fy, pause=0.45)
         a2x, a2y = self._wait_for_image('attack2.png', timeout=5, error=False)
         for _ in range(3):
             if a2x:
                 break
-            rfx, rfy = self._find_template_once(battle_template)
+            frame_rf = self.window.screenshot()
+            rfx, rfy = self._select_battle_mode_button(frame_rf, battle_template, ranked_fill=ranked_fill)
             if not rfx:
                 break
             logger.info('%s still on screen — click was eaten (popup?); re-clicking', battle_template)
-            self.input.click(rfx, rfy, pause=0.1)
+            self.input.click(rfx, rfy, pause=0.45)
             a2x, a2y = self._wait_for_image('attack2.png', timeout=5, error=False)
         if not a2x:
-            a2x, a2y = self._wait_for_image('attack2.png')
+            a2x, a2y = self._wait_for_image('attack2.png', error=False)
         if not a2x:
-            raise RuntimeError('Army review Attack button could not be recognized; no deployment was attempted.')
+            logger.warning('Army review Attack button (attack2.png) not recognized — recovering to Home screen instead of crashing')
+            self._dismiss_open_popup()
+            return 'no_attack'
         if method_id == 3 and (not self._ensure_valkyrie_army_from_recipes()):
             msg = 'Valkyrie army not confirmed (slow screen or missing saved recipe) — attacking with current army'
             logger.warning(msg)
@@ -1591,16 +1672,74 @@ deselect, which would eat the upcoming Attack click.'''
             if cb:
                 cb(msg)
         if a2x:
-            self.input.click(a2x, a2y, pause=0.1)
+            if self.stop_event.wait(0.2):
+                self._check_stop()
+                return 'no_attack'
+            self.input.click(a2x, a2y, pause=0.5)
             if ranked_fill:
                 rx, ry = self._wait_for_image('rankedattackconfirm.png', timeout=10)
                 if not rx:
                     logger.warning('rankedattackconfirm.png not found after attack2.png')
                 else:
-                    self.input.click(rx, ry, pause=0.1)
-        live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=45)
+                    self.input.click(rx, ry, pause=0.3)
+            else:
+                rx, ry = self._wait_for_image('rankedattackconfirm.png', timeout=1.5, error=False)
+                if rx:
+                    logger.info('Confirm Attack modal appeared after attack2.png — clicking Attack! (%d, %d)', rx, ry)
+                    self.input.click(rx, ry, pause=0.3)
+        live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=6, error=False)
+        for _ in range(3):
+            if live_x is not None:
+                break
+            frame_bf = self.window.screenshot()
+            if frame_bf is not None and getattr(frame_bf, 'size', 0) > 0:
+                self._update_config_size(frame_bf)
+                rkind, rlx, rly = self._find_reload_button(frame_bf)
+                if rlx:
+                    logger.warning('Attack launch: reload dialog (%s) detected — clicking RELOAD', rkind)
+                    self.input.click(rlx, rly, pause=0.5)
+                    self._wait_for_village_after_reload()
+                    return 'no_attack'
+                rx_c, ry_c = self.vision.find_template(frame_bf, 'rankedattackconfirm.png')
+                if rx_c:
+                    logger.info('Confirm Attack modal (rankedattackconfirm.png) visible during battlefield wait — clicking Attack!')
+                    self.input.click(rx_c, ry_c, pause=0.3)
+                ox, oy = self.vision.find_template(frame_bf, 'okay.png')
+                if ox:
+                    logger.info('Confirmation popup (okay.png) visible after Attack! — clicking Okay')
+                    self.input.click(ox, oy, pause=0.3)
+                a2_region = self._search_region_for_template(frame_bf, 'attack2.png', None, None, 200)
+                ra2x, ra2y = self._match_ui_control(frame_bf, 'attack2.png', region=a2_region)
+                if ra2x:
+                    logger.info('attack2.png still on screen — click was eaten (animation/popup?); re-clicking')
+                    self.input.click(ra2x, ra2y, pause=0.5)
+                    rx, ry = self._wait_for_image('rankedattackconfirm.png', timeout=3 if ranked_fill else 1.5, error=False)
+                    if rx:
+                        self.input.click(rx, ry, pause=0.3)
+                else:
+                    rfx, rfy = self._select_battle_mode_button(frame_bf, battle_template, ranked_fill=ranked_fill)
+                    if rfx:
+                        logger.info('%s still on screen during battlefield wait — re-clicking', battle_template)
+                        self.input.click(rfx, rfy, pause=0.45)
+                        ra2x, ra2y = self._wait_for_image('attack2.png', timeout=5, error=False)
+                        if ra2x:
+                            self.input.click(ra2x, ra2y, pause=0.5)
+                            rx, ry = self._wait_for_image('rankedattackconfirm.png', timeout=3 if ranked_fill else 1.5, error=False)
+                            if rx:
+                                self.input.click(rx, ry, pause=0.3)
+            live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=10, error=False)
         if live_x is None:
-            raise RuntimeError('Battlefield could not be confirmed after Attack; no deployment was attempted.')
+            live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=15)
+        if live_x is None:
+            frame_timeout = self.window.screenshot()
+            _dump_debug_frame(frame_timeout, 'battlefield_timeout')
+            logger.warning(
+                'Battlefield could not be confirmed after Attack (clicks: battle=%s, attack2=%s) — recovering to Home screen instead of crashing',
+                (fx, fy),
+                (a2x, a2y),
+            )
+            self._dismiss_open_popup()
+            return 'no_attack'
         if not ranked_fill:
             self._skip_low_loot_bases()
         frame = self.window.screenshot()
@@ -1995,6 +2134,9 @@ deselect, which would eat the upcoming Attack click.'''
             if sx:
                 logger.info('Recovery: live battle — surrendering to get home')
                 self.input.click(sx, sy, pause=0.3)
+                ox, oy = self._wait_for_image('okay.png', timeout=2, error=False)
+                if ox:
+                    self.input.click(ox, oy, pause=0.3)
                 if self.stop_event.wait(0.5):
                     self._check_stop()
                     return
@@ -2009,6 +2151,9 @@ deselect, which would eat the upcoming Attack click.'''
                 if sx:
                     logger.info('Recovery: live battle — surrendering to get home')
                     self.input.click(sx, sy, pause=0.3)
+                    ox, oy = self._wait_for_image('okay.png', timeout=2, error=False)
+                    if ox:
+                        self.input.click(ox, oy, pause=0.3)
                     if self.stop_event.wait(0.5):
                         return
                     else:
