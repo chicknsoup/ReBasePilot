@@ -1,21 +1,23 @@
-'''BasePilot mission-control theme: OLED-dark instrument-panel QSS for the PySide6 UI.
+"""BasePilot mission-control theme: OLED-dark instrument-panel QSS for the PySide6 UI.
 
-Design system (ui-ux-pro-max "Dark Mode (OLED)" + Fira dashboard pairing): near-black
+Design system (OLED Tactical Telemetry + Fira/Cascadia pairing): near-black
 background, slate instrument surfaces, GREEN as the "autopilot engaged" accent (red is
-reserved for Stop/destructive), monospace figures for data readouts, uppercase
-letter-spaced micro-labels for panel sections. Fonts resolve at runtime with Windows
-fallbacks (Fira Code/Sans → Cascadia → Consolas/Segoe UI).
-'''
+reserved for Stop/destructive), resource-specific accents (Gold, Elixir, Dark Elixir),
+monospace tabular figures for data readouts, uppercase letter-spaced micro-labels for
+panel sections. Fonts resolve at runtime with Windows fallbacks.
+"""
 from __future__ import annotations
 from PySide6.QtGui import QColor, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
 TOKENS = {
     'bg': '#020617',           # near-black canvas (OLED)
-    'sidebar': '#0B1220',      # sidebar column, one step lighter than canvas
+    'sidebar': '#0B1220',      # sidebar column & recessed wells
     'surface': '#0F172A',      # instrument panel / card
-    'surface_hi': '#1E293B',   # raised surface, inputs
+    'surface_hi': '#1E293B',   # raised surface, hover cards, active inputs
+    'surface_raised': '#1E293B',
     'border': '#1E293B',
+    'border_subtle': '#1E293B',
     'border_hi': '#334155',
     'text': '#F8FAFC',
     'text_muted': '#94A3B8',
@@ -23,25 +25,32 @@ TOKENS = {
     'primary': '#22C55E',      # autopilot-engaged green
     'primary_hov': '#16A34A',
     'primary_dim': '#0E3A22',  # green-tinted disabled fill
+    'primary_subtle': '#0E3A22',
     'on_primary': '#04120A',   # near-black text on the green CTA
     'danger': '#EF4444',
     'danger_hov': '#DC2626',
     'success': '#22C55E',
     'warning': '#F59E0B',      # holding / idling amber
+    'gold': '#FACC15',         # Clash Gold accent
+    'elixir': '#E879F9',       # Clash Elixir magenta
+    'dark_elixir': '#A78BFA',  # Clash Dark Elixir violet
+    'info': '#38BDF8',         # Telemetry / info cyan
     'neutral': '#334155',
     'neutral_hov': '#3E4C63',
     'neutral_dark': '#1B2436',
-    'neutral_dark_hov': '#28354A' }
+    'neutral_dark_hov': '#28354A',
+}
 SPACING = {
     'xs': 4,
     'sm': 8,
     'md': 12,
     'lg': 16,
-    'xl': 24 }
+    'xl': 24,
+}
 RADIUS = 10
-SIDEBAR_WIDTH = 184
-WINDOW_DEFAULT = (900, 640)
-WINDOW_MIN = (720, 520)
+SIDEBAR_WIDTH = 176
+WINDOW_DEFAULT = (1040, 680)
+WINDOW_MIN = (860, 560)
 
 _SANS_CANDIDATES = ('Fira Sans', 'Segoe UI')
 _MONO_CANDIDATES = ('Fira Code', 'Cascadia Code', 'Cascadia Mono', 'Consolas')
@@ -67,7 +76,7 @@ def _resolve_fonts():
 
 def build_stylesheet():
     t = TOKENS
-    return f'''
+    return f"""
 QWidget {{
     background-color: {t['bg']};
     color: {t['text']};
@@ -88,6 +97,41 @@ QFrame#Card[variant="status"] {{
     border: 1px solid #1F3D2B;
     border-left: 3px solid {t['primary']};
 }}
+QFrame#Card[variant="command"] {{
+    background-color: {t['sidebar']};
+    border: 1px solid {t['border_hi']};
+    border-radius: {RADIUS}px;
+}}
+QFrame#SubCard {{
+    background-color: {t['sidebar']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+}}
+QFrame#MetricTile {{
+    background-color: {t['sidebar']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+}}
+QFrame#MetricTile[accent="gold"] {{
+    border-left: 3px solid {t['gold']};
+}}
+QFrame#MetricTile[accent="elixir"] {{
+    border-left: 3px solid {t['elixir']};
+}}
+QFrame#MetricTile[accent="dark"] {{
+    border-left: 3px solid {t['dark_elixir']};
+}}
+QFrame#MetricTile[accent="primary"] {{
+    border-left: 3px solid {t['primary']};
+}}
+QFrame#PlayerCard {{
+    background-color: {t['surface']};
+    border: 1px solid {t['border']};
+    border-radius: 8px;
+}}
+QFrame#PlayerCard[active="true"] {{
+    border-left: 3px solid {t['primary']};
+}}
 QLabel#SectionTitle {{
     color: {t['text_muted']};
     font-weight: 600;
@@ -101,14 +145,19 @@ QLabel#DurationUnit:disabled {{
     color: {t['text_faint']};
 }}
 QLabel#PageTitle {{
-    font-size: 20px;
+    font-size: 19px;
     font-weight: bold;
     color: {t['text']};
     background-color: transparent;
 }}
+QLabel#PageSubtitle {{
+    font-size: 12px;
+    color: {t['text_muted']};
+    background-color: transparent;
+}}
 QLabel#StatValue {{
     font-family: '{MONO_FONT}';
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 600;
     color: {t['text']};
     background-color: transparent;
@@ -119,6 +168,23 @@ QLabel#StatTitle {{
     font-weight: 600;
     background-color: transparent;
 }}
+QLabel#StatusBadge {{
+    font-family: '{MONO_FONT}';
+    font-size: 11px;
+    font-weight: bold;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background-color: {t['surface_hi']};
+    color: {t['text_muted']};
+    border: 1px solid {t['border_hi']};
+}}
+QLabel#SessionTimer {{
+    font-family: '{MONO_FONT}';
+    font-size: 13px;
+    font-weight: 600;
+    color: {t['text_muted']};
+    background-color: transparent;
+}}
 QLabel#Brand {{
     font-family: '{MONO_FONT}';
     font-size: 16px;
@@ -127,9 +193,9 @@ QLabel#Brand {{
 }}
 QPushButton {{
     border: none;
-    border-radius: 8px;
-    padding: 6px 12px;
-    min-height: 28px;
+    border-radius: 7px;
+    padding: 5px 12px;
+    min-height: 26px;
 }}
 QPushButton[role="primary"] {{
     background-color: {t['primary']};
@@ -162,23 +228,39 @@ QPushButton[role="neutral"] {{
 QPushButton[role="neutral"]:hover {{
     background-color: {t['neutral_hov']};
 }}
+QPushButton[role="neutral"]:disabled {{
+    background-color: {t['surface_hi']};
+    color: {t['text_faint']};
+}}
 QPushButton[role="chip"] {{
     background-color: {t['neutral_dark']};
-    color: {t['text']};
-    padding: 4px 10px;
-    min-height: 24px;
+    color: {t['text_muted']};
+    border: 1px solid {t['border']};
+    padding: 3px 9px;
+    min-height: 22px;
+    border-radius: 6px;
+    font-size: 12px;
 }}
 QPushButton[role="chip"]:hover {{
     background-color: {t['neutral_dark_hov']};
+    color: {t['text']};
+    border-color: {t['border_hi']};
+}}
+QPushButton[role="chip"]:checked, QPushButton[role="chip"][active="true"] {{
+    background-color: rgba(34, 197, 94, 0.16);
+    color: #4ADE80;
+    border: 1px solid {t['primary']};
+    font-weight: bold;
 }}
 QPushButton[role="chip"]:disabled {{
     background-color: {t['surface_hi']};
     color: {t['text_faint']};
 }}
 QPushButton[role="segment"] {{
-    background-color: transparent;
+    background-color: {t['sidebar']};
     border: 1px solid {t['border_hi']};
     color: {t['text_muted']};
+    padding: 5px 10px;
 }}
 QPushButton[role="segment"]:hover:!checked {{
     border-color: {t['text_muted']};
@@ -196,24 +278,42 @@ QPushButton[role="segment"][underDevelopment="true"] {{
 }}
 QLineEdit, QSpinBox, QComboBox, QTextEdit, QPlainTextEdit {{
     background-color: {t['sidebar']};
+    color: {t['text']};
     border: 1px solid {t['border_hi']};
     border-radius: 6px;
     padding: 4px 8px;
     selection-background-color: {t['primary_hov']};
+    selection-color: #ffffff;
 }}
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
     border-color: {t['primary']};
 }}
 QComboBox QAbstractItemView {{
     background-color: {t['surface_hi']};
+    color: {t['text']};
     border: 1px solid {t['border_hi']};
     selection-background-color: {t['neutral']};
 }}
+QSpinBox {{
+    font-family: '{MONO_FONT}';
+    font-weight: 600;
+}}
 QSpinBox#DurationSpin {{
     font-family: '{MONO_FONT}';
+    font-size: 13px;
+    font-weight: 600;
+    color: {t['text']};
+    background-color: {t['sidebar']};
     min-height: 28px;
     max-height: 28px;
     padding: 2px 6px;
+}}
+QSpinBox#DurationSpin QLineEdit {{
+    background-color: transparent;
+    color: {t['text']};
+    border: none;
+    padding: 0px;
+    margin: 0px;
 }}
 QSpinBox#DurationSpin::up-button, QSpinBox#DurationSpin::down-button {{
     width: 0px;
@@ -252,7 +352,7 @@ QPushButton[role="help"] {{
     max-height: 18px;
     max-width: 18px;
     border-radius: 9px;
-    border: 1px solid {t['text_muted']};
+    border: 1px solid {t['border_hi']};
     font-size: 11px;
     font-weight: bold;
 }}
@@ -264,10 +364,10 @@ QPushButton[role="icon"] {{
     background-color: {t['neutral_dark']};
     color: {t['text']};
     padding: 0;
-    min-height: 34px;
-    min-width: 34px;
-    max-height: 34px;
-    max-width: 34px;
+    min-height: 30px;
+    min-width: 30px;
+    max-height: 30px;
+    max-width: 30px;
     border-radius: 6px;
 }}
 QPushButton[role="icon"]:hover {{
@@ -284,6 +384,7 @@ QListWidget#Sidebar {{
 }}
 QListWidget#Sidebar::item {{
     padding: 10px 14px;
+    margin-bottom: 2px;
     border-radius: 6px;
     border-left: 3px solid transparent;
     color: {t['text_muted']};
@@ -313,11 +414,11 @@ QScrollArea {{
 }}
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
+    width: 8px;
 }}
 QScrollBar::handle:vertical {{
     background: {t['border_hi']};
-    border-radius: 5px;
+    border-radius: 4px;
     min-height: 24px;
 }}
 QScrollBar::add-line, QScrollBar::sub-line {{
@@ -332,7 +433,29 @@ QCheckBox#ToggleSwitch::indicator {{
     height: 0;
     border: none;
 }}
-'''
+QTabWidget::pane {{
+    border: none;
+    background: transparent;
+}}
+QTabBar::tab {{
+    background: {t['sidebar']};
+    color: {t['text_muted']};
+    border: 1px solid {t['border']};
+    border-radius: 6px;
+    padding: 6px 14px;
+    margin-right: 6px;
+    font-weight: 600;
+}}
+QTabBar::tab:selected {{
+    background: rgba(34, 197, 94, 0.16);
+    color: #4ADE80;
+    border-color: {t['primary']};
+}}
+QTabBar::tab:hover:!selected {{
+    color: {t['text']};
+    border-color: {t['border_hi']};
+}}
+"""
 
 
 def apply_theme(app):
@@ -354,5 +477,4 @@ def apply_theme(app):
     app.setStyleSheet(build_stylesheet())
 
 
-# Back-compat: some call sites import STYLESHEET directly.
 STYLESHEET = build_stylesheet()
