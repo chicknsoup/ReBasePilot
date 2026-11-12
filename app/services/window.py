@@ -22,6 +22,7 @@ WM_MOUSEWHEEL = 522
 WHEEL_DELTA = 120
 _CHILD_CLASS_PREFIX = 'CROSVM'
 _MINIMIZED_COORD = (-30000)
+_ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 @dataclass
 class WindowCandidate:
     """A visible top-level window plus its resolved Google Play Games game surface (if any)."""
@@ -77,7 +78,7 @@ class WindowService:
     def _configure_capture_api(self):
         """Declare pointer-width handle types for 64-bit Windows capture calls."""
         # ***<module>.WindowService._configure_capture_api: Failure: Different bytecode
-        declarations = ((self.user32.GetWindowDC, [wintypes.HWND], wintypes.HDC), (self.user32.ReleaseDC, [wintypes.HWND, wintypes.HDC], ctypes.c_int), (self.user32.PrintWindow, [wintypes.HWND, wintypes.HDC, wintypes.UINT], wintypes.BOOL), (self.user32.GetWindowRect, [wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL), (self.user32.IsIconic, [wintypes.HWND], wintypes.BOOL), (self.user32.GetParent, [wintypes.HWND], wintypes.HWND), (self.gdi32.CreateCompatibleDC, [wintypes.HDC], wintypes.HDC), (self.gdi32.CreateCompatibleBitmap, [wintypes.HDC, ctypes.c_int, ctypes.c_int], wintypes.HANDLE), (self.gdi32.SelectObject, [wintypes.HDC, wintypes.HANDLE], wintypes.HANDLE), (self.gdi32.DeleteObject, [wintypes.HANDLE], wintypes.BOOL), (self.gdi32.DeleteDC, [wintypes.HDC], wintypes.BOOL), (self.gdi32.GetDIBits, [wintypes.HDC, wintypes.HANDLE, wintypes.UINT, wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT], ctypes.c_int))
+        declarations = ((self.user32.EnumWindows, [_ENUM_WINDOWS_PROC, wintypes.LPARAM], wintypes.BOOL), (self.user32.EnumChildWindows, [wintypes.HWND, _ENUM_WINDOWS_PROC, wintypes.LPARAM], wintypes.BOOL), (self.user32.IsWindowVisible, [wintypes.HWND], wintypes.BOOL), (self.user32.IsWindow, [wintypes.HWND], wintypes.BOOL), (self.user32.GetClassNameW, [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int), (self.user32.GetWindowTextLengthW, [wintypes.HWND], ctypes.c_int), (self.user32.GetWindowTextW, [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int), (self.user32.GetWindowDC, [wintypes.HWND], wintypes.HDC), (self.user32.ReleaseDC, [wintypes.HWND, wintypes.HDC], ctypes.c_int), (self.user32.PrintWindow, [wintypes.HWND, wintypes.HDC, wintypes.UINT], wintypes.BOOL), (self.user32.GetWindowRect, [wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL), (self.user32.IsIconic, [wintypes.HWND], wintypes.BOOL), (self.user32.GetParent, [wintypes.HWND], wintypes.HWND), (self.gdi32.CreateCompatibleDC, [wintypes.HDC], wintypes.HDC), (self.gdi32.CreateCompatibleBitmap, [wintypes.HDC, ctypes.c_int, ctypes.c_int], wintypes.HANDLE), (self.gdi32.SelectObject, [wintypes.HDC, wintypes.HANDLE], wintypes.HANDLE), (self.gdi32.DeleteObject, [wintypes.HANDLE], wintypes.BOOL), (self.gdi32.DeleteDC, [wintypes.HDC], wintypes.BOOL), (self.gdi32.GetDIBits, [wintypes.HDC, wintypes.HANDLE, wintypes.UINT, wintypes.UINT, ctypes.c_void_p, ctypes.c_void_p, wintypes.UINT], ctypes.c_int))
         for function, arguments, result in declarations:
             function.argtypes = arguments
             function.restype = result
@@ -147,8 +148,8 @@ class WindowService:
         return buff.value
     def _find_descendant(self, root_hwnd, predicate):
         '''Depth-first search for the first descendant whose class satisfies ``predicate``.'''
-        EnumChildWindows = self.user32.EnumChildWindows
-        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        if not root_hwnd:
+            return (0, '')
         found = {
             'hwnd': 0,
             'class': '' }
@@ -158,10 +159,10 @@ class WindowService:
                 found['hwnd'] = child_hwnd
                 found['class'] = cls
                 return False
-            EnumChildWindows(child_hwnd, EnumWindowsProc(enum_child_cb), 0)
             return True
 
-        EnumChildWindows(root_hwnd, EnumWindowsProc(enum_child_cb), 0)
+        cb = _ENUM_WINDOWS_PROC(enum_child_cb)
+        self.user32.EnumChildWindows(root_hwnd, cb, 0)
         return (found['hwnd'], found['class'])
     def _find_crosvm_descendant(self, root_hwnd, preferred_class = ''):
         '''Resolve a game-surface child: exact ``preferred_class`` first, then any ``CROSVM*``.'''
@@ -191,8 +192,6 @@ Returns ``(surface_hwnd, surface_class)`` or ``(0, "")`` when no surface is pres
 Used by the Settings picker so users can choose the right window when auto-detection
 fails. Candidates with a CROSVM surface are sorted first.
 '''
-        EnumWindows = self.user32.EnumWindows
-        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
         IsWindowVisible = self.user32.IsWindowVisible
         candidates = []
         def enum_top_cb(hwnd, lParam):
@@ -204,28 +203,36 @@ fails. Candidates with a CROSVM surface are sorted first.
                     candidates.append(WindowCandidate(top_hwnd = hwnd, title = title, top_class = top_class, child_hwnd = child_hwnd, child_class = child_class))
             return True
 
-        EnumWindows(EnumWindowsProc(enum_top_cb), 0)
+        cb = _ENUM_WINDOWS_PROC(enum_top_cb)
+        self.user32.EnumWindows(cb, 0)
         candidates.sort(key = (lambda c: (not (c.is_game), c.title.lower())))
         return candidates
     def enumerate_descendants(self, root_hwnd):
         '''All descendant windows of ``root_hwnd`` (class, title, size, depth) for diagnostics.'''
-        EnumChildWindows = self.user32.EnumChildWindows
-        EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        if not root_hwnd:
+            return []
         results = []
         seen = set()
-        def walk(parent_hwnd, depth):
-            def cb(child_hwnd, lParam):
-                if child_hwnd not in seen:
-                    seen.add(child_hwnd)
-                    cls = self._get_class(child_hwnd)
-                    size = self.window_pixel_size(child_hwnd)
-                    results.append(DescendantInfo(hwnd = child_hwnd, cls = cls, title = self._get_title(child_hwnd), width = size[0] if size else 0, height = size[1] if size else 0, depth = depth, is_surface = cls.upper().startswith(_CHILD_CLASS_PREFIX)))
-                    walk(child_hwnd, depth + 1)
-                return True
+        def _depth_from_root(hwnd):
+            depth = 0
+            cur = self.user32.GetParent(hwnd)
+            visited = {hwnd}
+            while cur and cur != root_hwnd and cur not in visited:
+                visited.add(cur)
+                depth += 1
+                cur = self.user32.GetParent(cur)
+            return depth
 
-            EnumChildWindows(parent_hwnd, EnumWindowsProc(cb), 0)
+        def cb(child_hwnd, lParam):
+            if child_hwnd not in seen:
+                seen.add(child_hwnd)
+                cls = self._get_class(child_hwnd)
+                size = self.window_pixel_size(child_hwnd)
+                results.append(DescendantInfo(hwnd = child_hwnd, cls = cls, title = self._get_title(child_hwnd), width = size[0] if size else 0, height = size[1] if size else 0, depth = _depth_from_root(child_hwnd), is_surface = cls.upper().startswith(_CHILD_CLASS_PREFIX)))
+            return True
 
-        walk(root_hwnd, 0)
+        proc = _ENUM_WINDOWS_PROC(cb)
+        self.user32.EnumChildWindows(root_hwnd, proc, 0)
         return results
     def window_pixel_size(self, hwnd):
         '''Outer pixel size of any HWND via ``GetWindowRect`` (same basis as :meth:`screenshot`).'''
