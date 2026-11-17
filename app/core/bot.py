@@ -460,7 +460,7 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
             self._update_config_size(frame)
             gx, _gy = VisionService.find_active_hgoldfull(frame)
             ex, _ey = VisionService.find_active_helixirfull(frame)
-            icons_full = gx is not None or ex is not None
+            icons_full = gx is not None or ex is not None or bool(getattr(self, '_gold_pinned', False) or getattr(self, '_elixir_pinned', False))
             threshold = int(getattr(self, '_wall_upgrade_threshold', 0) or 0)
             if threshold <= 0:
                 if icons_full:

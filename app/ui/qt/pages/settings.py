@@ -401,6 +401,7 @@ class SettingsPage(QWidget):
         self._wall_threshold = QSpinBox()
         self._wall_threshold.setRange(0, WALL_UPGRADE_THRESHOLD_M_MAX)
         self._wall_threshold.setSuffix('M')
+        self._wall_threshold.setSpecialValueText('Full')
         self._wall_threshold.setFixedWidth(96)
         upg_grid.addWidget(wall_lbl, 1, 0)
         upg_grid.addWidget(self._wall_threshold, 1, 1)
