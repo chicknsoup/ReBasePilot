@@ -95,7 +95,7 @@ if onefile_mode:
         a.binaries,
         a.datas,
         [],
-        name='BasePilot',
+        name='BaseLooter',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -108,7 +108,7 @@ if onefile_mode:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=['assets\\basepilot_logo.ico'],
+        icon=['assets\\baselooter_logo.ico'],
     )
 else:
     exe = EXE(
@@ -116,7 +116,7 @@ else:
         a.scripts,
         [],
         exclude_binaries=True,
-        name='BasePilot',
+        name='BaseLooter',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
@@ -127,7 +127,7 @@ else:
         target_arch=None,
         codesign_identity=None,
         entitlements_file=None,
-        icon=['assets\\basepilot_logo.ico'],
+        icon=['assets\\baselooter_logo.ico'],
     )
     coll = COLLECT(
         exe,
@@ -136,5 +136,5 @@ else:
         strip=False,
         upx=False,
         upx_exclude=[],
-        name='BasePilot',
+        name='BaseLooter',
     )
