@@ -86,6 +86,8 @@ try:
             return (w / cfg.ref_width, h / cfg.ref_height)
         _MULTISCALE_WALL_TEMPLATES = frozenset({'upgrademore.png', 'multiupgrade.png'})
         _WALL_TEMPLATE_SCALE_FACTORS = (1.0, 0.90, 0.85)
+        _MULTISCALE_CHEST_TEMPLATES = frozenset({'chestcontinue.png', 'chestclaim.png'})
+        _CHEST_TEMPLATE_SCALE_FACTORS = (1.0, 1.08, 1.12, 1.16, 0.92)
         @staticmethod
         def _resize_template_for_screen(template, screen_img):
             '''Resize reference PNG templates to match the current capture.'''
@@ -103,7 +105,12 @@ try:
             (sx, sy) = VisionService._template_scale_xy(screen_img)
             (t_h, t_w) = template.shape[:2]
             (s_h, s_w) = search_img.shape[:2]
-            factors = VisionService._WALL_TEMPLATE_SCALE_FACTORS if template_name in VisionService._MULTISCALE_WALL_TEMPLATES else (1.0,)
+            if template_name in VisionService._MULTISCALE_WALL_TEMPLATES:
+                factors = VisionService._WALL_TEMPLATE_SCALE_FACTORS
+            elif template_name in VisionService._MULTISCALE_CHEST_TEMPLATES:
+                factors = VisionService._CHEST_TEMPLATE_SCALE_FACTORS
+            else:
+                factors = (1.0,)
             scale_pairs = []
             for factor in factors:
                 scale_pairs.append((sx * factor, sy * factor))

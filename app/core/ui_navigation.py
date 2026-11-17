@@ -226,7 +226,7 @@ def find_navigation_fallback(frame, vision, template, region=None):
                 fallback_zone = _zone(frame, 0.48, 0.25, 0.98, 0.85) if template == 'rankedbattle.png' else _zone(frame, 0.02, 0.25, 0.52, 0.85)
                 return find_ui_label(frame, vision, 'Find a Match', fallback_zone, min_confidence=40)
             else:
-                labels = {'train.png': 'Edit Army', 'attack2.png': 'Attack', 'rankedattackconfirm.png': 'Attack', 'findnow.png': 'Find Now', 'savedrecipes.png': 'Saved Recipes', 'use.png': 'Use', 'returnhome.png': 'Return Home', 'returnhome2.png': 'Return Home', 'breturnhome.png': 'Return Home', 'breturnhome1920.png': 'Return Home', 'surrender.png': 'Surrender', 'endbattle.png': 'End Battle'}
+                labels = {'train.png': 'Edit Army', 'attack2.png': 'Attack', 'rankedattackconfirm.png': 'Attack', 'findnow.png': 'Find Now', 'savedrecipes.png': 'Saved Recipes', 'use.png': 'Use', 'returnhome.png': 'Return Home', 'returnhome2.png': 'Return Home', 'breturnhome.png': 'Return Home', 'breturnhome1920.png': 'Return Home', 'chestcontinue.png': 'Continue', 'chestclaim.png': 'Claim', 'surrender.png': 'Surrender', 'endbattle.png': 'End Battle'}
                 label = labels.get(template)
                 if label is None:
                     return (None, None)
@@ -238,6 +238,8 @@ def find_navigation_fallback(frame, vision, template, region=None):
                         'returnhome2.png': (0.35, 0.72, 0.65, 0.98),
                         'breturnhome.png': (0.35, 0.72, 0.65, 0.98),
                         'breturnhome1920.png': (0.35, 0.72, 0.65, 0.98),
+                        'chestcontinue.png': (0.25, 0.70, 0.75, 0.96),
+                        'chestclaim.png': (0.30, 0.70, 0.70, 0.98),
                         'attack2.png': (0.35, 0.65, 1.0, 0.98),
                         'rankedattackconfirm.png': (0.35, 0.55, 0.98, 0.98),
                         'findnow.png': (0.35, 0.55, 0.98, 0.98),

@@ -1163,13 +1163,14 @@ deselect, which would eat the upcoming Attack click.'''
                 self.input.click(cancel_x, int(ry), pause=0.25)
                 return True
         names = ['okay.png', 'exit.png']
-        for extra in ('claim_btn.png', 'dailyreward_x.png', 'needgold_x.png', 'panel_x.png'):
+        for extra in ('claim_btn.png', 'chestcontinue.png', 'dailyreward_x.png', 'needgold_x.png', 'panel_x.png'):
             if get_template_path(extra).exists():
                 names.append(extra)
         for name in names:
             (x, y) = self.vision.find_template(frame, name)
             if not x:
                 continue
+            logger.info('Dismissing popup control %s at (%d, %d)', name, int(x), int(y))
             self.input.click(x, y, pause = 0.15)
             return True
         return False
@@ -2078,20 +2079,36 @@ deselect, which would eat the upcoming Attack click.'''
         '''After ``chestclaim`` was clicked: tap center-right (±85px) until ``chestcontinue.png``, then click it (home).'''
         CHEST_TAP_TIMEOUT = 120
         deadline = time.time() + CHEST_TAP_TIMEOUT
+        taps = 0
         while time.time() < deadline:
             self._check_stop()
             (nx, ny) = self._random_point_chest_tap_through()
             self.input.click_at(nx, ny, rand = False)
+            taps += 1
             t0 = time.time()
             if self.stop_event.wait(0.15):
                 return None
             frame2 = self.window.screenshot()
             if not frame2 is None:
                 self._update_config_size(frame2)
-                (tx, ty) = self.vision.find_template(frame2, 'chestcontinue.png')
+                bot_roi = VisionService.bottom_half_region(frame2)
+                (tx, ty) = self.vision.find_template(frame2, 'chestcontinue.png', region = bot_roi)
+                if not tx and taps % 4 == 0:
+                    (tx, ty) = self._match_ui_control(frame2, 'chestcontinue.png', region = bot_roi)
                 if tx:
-                    logger.info('Chest reward: chestcontinue.png found; clicking (expect home village)')
-                    self.input.click(tx, ty, pause = 0.25)
+                    logger.info('Chest reward: Continue button found at (%d, %d); clicking', int(tx), int(ty))
+                    self.input.click(tx, ty, pause = 0.4)
+                    if self.stop_event.wait(0.4):
+                        return None
+                    frame3 = self.window.screenshot()
+                    if frame3 is not None and getattr(frame3, 'size', 0) > 0:
+                        self._update_config_size(frame3)
+                        bot3 = VisionService.bottom_half_region(frame3)
+                        ax, _ = self.vision.find_template(frame3, 'attack.png', region = bot3)
+                        if ax or is_village_hud(frame3, self.vision):
+                            return None
+                        # Another reward/chest screen may follow immediately; keep tapping
+                        continue
                     return None
             elapsed = time.time() - t0
             to_wait = max(0.05, 0.5 - elapsed)
@@ -2174,6 +2191,13 @@ deselect, which would eat the upcoming Attack click.'''
                 if self.stop_event.wait(0.5):
                     return
                 continue
+            cx, cy = self.vision.find_template(frame, 'chestclaim.png', region=bot_roi)
+            if cx:
+                self._record_raid_result(frame)
+                logger.info('Recovery: chestclaim.png visible — running chest flow')
+                self.input.click(cx, cy, pause=0.25)
+                self._tap_empty_until_chest_continue()
+                continue
             sx, sy = self.vision.find_template(frame, 'surrender.png', region=bot_roi)
             if not sx:
                 sx, sy = self.vision.find_template(frame, 'endbattle.png', region=bot_roi)
@@ -2193,6 +2217,20 @@ deselect, which would eat the upcoming Attack click.'''
                 self._finish_unread_raid('home reached without a readable result screen')
                 return
             if step % 3 == 0:
+                tx, ty = self._match_ui_control(frame, 'chestcontinue.png', region=bot_roi)
+                if tx:
+                    logger.info('Recovery: reward Continue button visible at (%d, %d) — clicking', int(tx), int(ty))
+                    self.input.click(tx, ty, pause=0.3)
+                    if self.stop_event.wait(0.5):
+                        return
+                    continue
+                cx, cy = self._match_ui_control(frame, 'chestclaim.png', region=bot_roi)
+                if cx:
+                    self._record_raid_result(frame)
+                    logger.info('Recovery: Claim button visible at (%d, %d) — running chest flow', int(cx), int(cy))
+                    self.input.click(cx, cy, pause=0.25)
+                    self._tap_empty_until_chest_continue()
+                    continue
                 sx, sy = self._match_ui_control(frame, 'surrender.png', region=bot_roi)
                 if sx:
                     logger.info('Recovery: live battle — surrendering to get home')
