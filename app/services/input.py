@@ -11,6 +11,10 @@ from typing import Tuple
 from app.services.window import WindowService, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, MK_LBUTTON, WM_MOUSEWHEEL, WHEEL_DELTA
 from app.utils.logger import setup_logger
 logger = setup_logger('InputService')
+WM_ACTIVATE = 0x0006
+WM_SETFOCUS = 0x0007
+WA_ACTIVE = 1
+_SURFACE_ACTIVATE_INTERVAL_S = 2.0
 _CLICK_JITTER_REF_PX = 15
 _REFERENCE_WIDTH = 2560
 class InputService:
@@ -19,6 +23,28 @@ class InputService:
         self.window_service = window_service
         self.stop_event = stop_event
         self.user32 = ctypes.windll.user32
+        self._last_active_hwnd = 0
+        self._last_active_ts = 0.0
+    def _ensure_surface_active(self, hwnd, *, force=False):
+        """Ensure Google Play Games' CROSVM surface is the active/focused scanout.
+
+        When Clash of Clans launches or restarts on a secondary/virtual display without
+        being physically clicked, crosvm's WindowMessageDispatcher leaves the new scanout
+        out of foreground and Android InputReader keeps 'Crosvm Virtio Multitouch
+        Touchscreen 0' bound to display 0 (1280x1024 launcher) instead of the game display.
+        Sending WM_ACTIVATE(WA_ACTIVE) + WM_SETFOCUS directly to the CROSVM child HWND
+        switches crosvm's foreground scanout and rebinds the touchscreen to the game
+        display without stealing the user's OS foreground window or cursor.
+        """
+        if not hwnd:
+            return
+        now = time.monotonic()
+        if not force and hwnd == self._last_active_hwnd and (now - self._last_active_ts) < _SURFACE_ACTIVATE_INTERVAL_S:
+            return
+        self._last_active_hwnd = hwnd
+        self._last_active_ts = now
+        self._send_msg(hwnd, WM_ACTIVATE, WA_ACTIVE, 0)
+        self._send_msg(hwnd, WM_SETFOCUS, 0, 0)
     def _click_jitter(self):
         """Half-width of the click scatter, in capture pixels.\n\nThe +/-15 px it was written with is 15 px *at the authoring resolution*. Left\nunscaled it doubles in relative terms on a 1299-wide window, where a builder-menu\nrow is only ~30 px tall — so the scatter, meant to keep clicks off one exact\npixel, was landing them on the row above or below.\n"""
         sz = self.window_service.get_outer_pixel_size()
@@ -90,6 +116,7 @@ class InputService:
         if not hwnd:
             return
         else:
+            self._ensure_surface_active(hwnd)
             lparam = self._make_lparam(int(x), int(y))
             self._send_msg(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
             self._send_msg(hwnd, WM_LBUTTONUP, 0, lparam)
@@ -105,6 +132,7 @@ class InputService:
         if not hwnd:
             return
         else:
+            self._ensure_surface_active(hwnd)
             lparam = self._make_lparam(x, y)
             self._send_msg(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
     def mouse_up(self, x, y):
@@ -159,6 +187,7 @@ class InputService:
         if not hwnd:
             return
         else:
+            self._ensure_surface_active(hwnd)
             delta = int(WHEEL_DELTA if upward else -WHEEL_DELTA)
             wparam = delta << 16
             sx, sy = self._client_to_screen(x, y)

@@ -46,7 +46,7 @@ def load_digit_bank():
             raise ValueError('Incomplete Clash price digit atlas')
         else:
             return (np.stack(masks), np.array(digits), np.array([mask.sum() for mask in masks]))
-def read_price_digits(image):
+def read_price_digits(image, *, min_digits=4):
     """Return a complete high-confidence price, or None; never fill missing digits."""
     if image is None or not image.size:
         return None
@@ -66,7 +66,7 @@ def read_price_digits(image):
         else:
             line.append(box)
     boxes = sorted(max(lines, key=lambda line: sum((b[2] * b[3] for b in line))), key=lambda b: b[0])
-    if not 4 <= len(boxes) <= 8:
+    if not max(1, int(min_digits)) <= len(boxes) <= 8:
         return None
     bank, labels, counts = load_digit_bank()
     digits, scores = ([], [])
@@ -81,7 +81,7 @@ def read_price_digits(image):
         per_digit = [float(similarities[labels == digit].max()) for digit in range(10)]
         order = np.argsort(per_digit)
         best, second = (int(order[(-1)]), int(order[(-2)]))
-        if per_digit[best] < 0.82 or per_digit[best] - per_digit[second] < 0.025:
+        if per_digit[best] < 0.82 or per_digit[best] - per_digit[second] < 0.02:
             return None
         digits.append(str(best))
         scores.append(per_digit[best])

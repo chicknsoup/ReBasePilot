@@ -99,20 +99,26 @@ try:
             return cv2.resize(template, (new_w, new_h), interpolation = interp)
         @staticmethod
         def _best_scaled_template(template, screen_img, search_img, template_name = ''):
-            '''Return the resized template (at the best matching scale factor for bottom-bar wall templates when Buildings & Heroes is open).'''
-            if template_name not in VisionService._MULTISCALE_WALL_TEMPLATES:
-                return VisionService._resize_template_for_screen(template, screen_img)
+            '''Return the resized template (at the best matching scale factor, including uniform height scale when aspect ratio differs from 16:10 reference).'''
             (sx, sy) = VisionService._template_scale_xy(screen_img)
             (t_h, t_w) = template.shape[:2]
             (s_h, s_w) = search_img.shape[:2]
+            factors = VisionService._WALL_TEMPLATE_SCALE_FACTORS if template_name in VisionService._MULTISCALE_WALL_TEMPLATES else (1.0,)
+            scale_pairs = []
+            for factor in factors:
+                scale_pairs.append((sx * factor, sy * factor))
+                if abs(sx - sy) > 0.01:
+                    scale_pairs.append((sy * factor, sy * factor))
+            if len(scale_pairs) == 1:
+                return VisionService._resize_template_for_screen(template, screen_img)
             best_tpl = None
             best_score = -2.0
-            for factor in VisionService._WALL_TEMPLATE_SCALE_FACTORS:
-                new_w = max(1, int(round(t_w * sx * factor)))
-                new_h = max(1, int(round(t_h * sy * factor)))
+            for fx, fy in scale_pairs:
+                new_w = max(1, int(round(t_w * fx)))
+                new_h = max(1, int(round(t_h * fy)))
                 if new_w > s_w or new_h > s_h:
                     continue
-                interp = cv2.INTER_AREA if min(sx * factor, sy * factor) < 1 else cv2.INTER_CUBIC
+                interp = cv2.INTER_AREA if min(fx, fy) < 1 else cv2.INTER_CUBIC
                 cand = cv2.resize(template, (new_w, new_h), interpolation = interp)
                 (_, val, _, _) = cv2.minMaxLoc(cv2.matchTemplate(search_img, cand, cv2.TM_CCOEFF_NORMED))
                 if float(val) > best_score:
@@ -1544,7 +1550,7 @@ with one inner list per Y-cluster (characters left-to-right) after clustering, f
                         continue
                     return []
                 max_val = 2000000 if index == 2 else 30000000
-                glyphs = read_price_digits(crop)
+                glyphs = read_price_digits(crop, min_digits=1)
                 if glyphs is not None and glyphs.score >= 0.84 and 0 <= glyphs.value <= max_val:
                     groups.append(GroupedNumber(left=left, top=top, width=right - left, height=roi_height, text=str(glyphs.value), confidence=float(glyphs.score * 100.0)))
                     continue

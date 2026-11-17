@@ -559,7 +559,7 @@ Heroes title. Unpaired or duplicate OCR readings remain unknown.
         match = VisionService.find_template(frame, 'build.png', region=(fw // 2, fh // 2, fw - fw // 2, fh - fh // 2))
         if match[0] is not None:
             template = cv2.imread(str(get_template_path('build.png')))
-            template = VisionService._resize_template_for_screen(template, frame)
+            template = VisionService._best_scaled_template(template, frame, frame[fh // 2:, fw // 2:], 'build.png')
             h, w = template.shape[:2]
             x, y = match[0] - w // 2, match[1] - h // 2
         elif buttons:
@@ -577,12 +577,14 @@ Heroes title. Unpaired or duplicate OCR readings remain unknown.
             if not words or any((not math.isfinite(float(getattr(w, 'confidence', -1))) or float(getattr(w, 'confidence', -1)) < (40 if index == 0 else 5) for w in words)):
                 continue
             text = ''.join((w.text.strip() for w in sorted(words, key=lambda w: w.left)))
-            match = re.fullmatch('([0-6])/([1-6])', text)
+            match = re.fullmatch('([0-7])/([1-7])', text)
             if not match:
                 continue
             free, total = map(int, match.groups())
-            if free <= total and total <= (6 if index == 0 else 2):
+            if free <= total and total <= (7 if index == 0 else 2):
                 votes.append((free, total))
+                if votes.count((free, total)) >= 2:
+                    break
         agreed = next((value for value in votes if votes.count(value) >= 2), None)
         readings.append(agreed)
     return readings
@@ -626,12 +628,12 @@ def _parse_fraction_chip_once(frame, roi, max_total, roi_upscale, white_text):
             return (free, total)
     return None
 def parse_builder_chip(frame):
-    """Top-HUD builder chip → ``(free, total)`` builders, or ``None``.\nmax_total 6: the Home Village never has more builders — and dialog screens leak\nstray digits into the chip ROI (live repro: an upgrade confirm screen read as\n\"8/8\" and passed the old ≤8 bound, poisoning the post-upgrade verification)."""
+    """Top-HUD builder chip → ``(free, total)`` builders, or ``None``.\nmax_total 7: 5 builders + B.O.B + Goblin Builder = 7 max — and dialog screens leak\nstray digits into the chip ROI (live repro: an upgrade confirm screen read as\n\"8/8\" and passed the old ≤8 bound, poisoning the post-upgrade verification)."""
     fractions = _new_build_chip_fractions(frame)
     if fractions is not None:
         return fractions[0] if fractions else None
     else:
-        return _parse_fraction_chip(frame, _BUILDER_CHIP_ROI_FRAC, max_total=6)
+        return _parse_fraction_chip(frame, _BUILDER_CHIP_ROI_FRAC, max_total=7)
 def parse_lab_chip(frame):
     """Top-HUD laboratory chip (flask+sword icon, \"0/1\") → ``(free, total)`` research\nslots, or ``None`` when unreadable/absent (no laboratory yet, or the chip band is\ncovered). total ≤ 2 also keeps a stray read of the builder chip (\"0/6\") from being\nmistaken for the lab."""
     fractions = _new_build_chip_fractions(frame)

@@ -1131,6 +1131,7 @@ deselect, which would eat the upcoming Attack click.'''
                 self._update_config_size(frame)
                 rkind, rlx, rly = self._find_reload_button(frame)
                 if rlx:
+                    self.input._ensure_surface_active(self.window.hwnd, force=True)
                     self.input.click(rlx, rly, pause=1.0)
                     continue
                 self._dismiss_okay_or_exit_on_frame(frame)
@@ -1176,6 +1177,7 @@ deselect, which would eat the upcoming Attack click.'''
     def _wait_for_attack_with_nudge(self, timeout=10, error=True):
         """Poll bottom-half ``attack.png``; dismiss ``okay`` / ``exit`` popups first; else empty + scroll."""
         start = time.time()
+        reload_attempts = 0
         while time.time() - start < timeout:
             self._check_stop()
             frame = self.window.screenshot()
@@ -1187,7 +1189,12 @@ deselect, which would eat the upcoming Attack click.'''
             self._update_config_size(frame)
             rkind, rlx, rly = self._find_reload_button(frame)
             if rlx:
+                reload_attempts += 1
+                if reload_attempts > 3:
+                    logger.warning('Attack wait: reload dialog (%s) persisted after %d reload attempts — bailing to recovery', rkind, reload_attempts - 1)
+                    return (None, None)
                 logger.warning('Attack wait: reload dialog (%s) detected — clicking RELOAD', rkind)
+                self.input._ensure_surface_active(self.window.hwnd, force=True)
                 self.input.click(rlx, rly, pause=1.0)
                 if not self._wait_for_village_after_reload() and self.stop_event.is_set():
                     return (None, None)
@@ -1659,6 +1666,7 @@ deselect, which would eat the upcoming Attack click.'''
                     rkind, rlx, rly = self._find_reload_button(frame_retry)
                     if rlx:
                         logger.warning('Attack open: reload dialog (%s) detected — clicking RELOAD', rkind)
+                        self.input._ensure_surface_active(self.window.hwnd, force=True)
                         self.input.click(rlx, rly, pause=0.5)
                         self._wait_for_village_after_reload()
                         return 'no_attack'
@@ -1668,6 +1676,7 @@ deselect, which would eat the upcoming Attack click.'''
                         rax, ray = find_battle_button(frame_retry, self.vision)
                     if rax:
                         logger.info('attack.png still on screen — click was eaten (popup/selection?); tapping empty and re-clicking')
+                        self.input._ensure_surface_active(self.window.hwnd, force=True)
                         self.input.click(*self.config.get_point('empty'), pause=0.15)
                         self.input.click(rax, ray, pause=0.6)
                 fx, fy = self._wait_for_battle_mode_button(battle_template, ranked_fill=ranked_fill, timeout=10)
@@ -2613,6 +2622,7 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
     def _wait_for_any_image(self, templates, timeout=10, error=True, threshold=0.8, region=None, region_from_frame=None):
         """First ordered template match wins (checked left-to-right each frame)."""
         start = time.time()
+        reload_warned = 0
         while time.time() - start < timeout:
             self._check_stop()
             frame = self.window.screenshot()
@@ -2625,7 +2635,12 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
                 continue
             rkind, rlx, rly = self._find_reload_button(frame)
             if rlx:
+                reload_warned += 1
+                if reload_warned > 3:
+                    logger.warning('%s wait: reload dialog (%s) persisted after %d reload attempts — bailing out', templates, rkind, reload_warned - 1)
+                    return (None, None)
                 logger.warning('%s wait: reload dialog (%s) detected — reloading the game', templates, rkind)
+                self.input._ensure_surface_active(self.window.hwnd, force=True)
                 self.input.click(rlx, rly, pause=1.0)
                 if not self._wait_for_village_after_reload() and self.stop_event.is_set():
                     return (None, None)
@@ -2674,8 +2689,12 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
             rkind, lx, ly = self._find_reload_button(frame)
             if lx:
                 reload_warned += 1
+                if reload_warned > 3:
+                    logger.warning('%s wait: reload dialog (%s) persisted after %d reload attempts — bailing out', template, rkind, reload_warned - 1)
+                    return (None, None)
                 if reload_warned == 1:
                     logger.warning('%s wait: reload dialog (%s) detected — reloading the game', template, rkind)
+                self.input._ensure_surface_active(self.window.hwnd, force=True)
                 self.input.click(lx, ly, pause=1.0)
                 if not self._wait_for_village_after_reload() and self.stop_event.is_set():
                     return (None, None)
