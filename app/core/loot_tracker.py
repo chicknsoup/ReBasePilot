@@ -33,10 +33,40 @@ def _read_amount(crop, limit, vision):
     if crop.size == 0:
         return
     try:
+        from app.services.clash_digits import DigitReading, _read_price_digits_at_floor, load_digit_bank, normalize_glyph
         from app.services.clash_digits import read_price_digits
         glyphs = read_price_digits(crop, min_digits=1, white_only=True)
         if glyphs is not None and glyphs.score >= 0.84 and 0 <= glyphs.value <= limit:
             return glyphs.value
+        # Event 2x boost (e.g. Clan Castle Cake) colors result digits bright yellow
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        ymask = cv2.inRange(hsv, (18, 80, 180), (38, 255, 255))
+        _, _, stats, _ = cv2.connectedComponentsWithStats(ymask)
+        candidates = [tuple(map(int, b[:4])) for b in stats[1:] if b[4] >= 4 and b[3] >= 6]
+        if candidates:
+            max_h = max(b[3] for b in candidates)
+            boxes = sorted([b for b in candidates if b[3] >= max(6, max_h * 0.65)], key=lambda b: b[0])
+            if 1 <= len(boxes) <= 8:
+                bank, labels, counts = load_digit_bank()
+                ydigits, yscores = [], []
+                for x, y, bw, bh in boxes:
+                    if x <= 0 or y <= 0 or x + bw >= ymask.shape[1] or y + bh >= ymask.shape[0] or not (0.2 <= bw / bh <= 1.5):
+                        ydigits = []
+                        break
+                    glyph = normalize_glyph(ymask[y:y + bh, x:x + bw]) > 0
+                    sims = 2 * (bank & glyph).sum(axis=(1, 2)) / (counts + glyph.sum())
+                    per = [float(sims[labels == d].max()) for d in range(10)]
+                    order = sorted(range(10), key=lambda d: per[d])
+                    best, second = order[-1], order[-2]
+                    if per[best] < 0.84 or per[best] - per[second] < 0.01:
+                        ydigits = []
+                        break
+                    ydigits.append(str(best))
+                    yscores.append(per[best])
+                if ydigits:
+                    val = int(''.join(ydigits))
+                    if 0 <= val <= limit:
+                        return val
     except Exception:
         pass
     votes = []
@@ -80,24 +110,43 @@ def read_raid_result(frame, vision=VisionService):
             ic_l0, ic_r0 = (round(cx + h * 0.049), round(cx + h * 0.115))
             if not (0 <= top0 < bot0 <= h and 0 <= ic_l0 < ic_r0 <= w and _currency_present(frame[top0:bot0, ic_l0:ic_r0], 0)):
                 cx, cy = find_ui_label(frame, vision, ('You got', 'YOU GOT', 'You Got'), region=(round(w * 0.40), round(h * 0.35), round(w * 0.20), round(h * 0.12)))
-            if cx is None:
-                return
-            else:
-                amounts = []
+            amounts = None
+            if cx is not None:
+                row_vals = []
                 for index, limit in enumerate(RESULT_LIMITS):
                     top = round(cy + (0.018 + index * 0.066) * h)
                     bottom = top + round(h * 0.058)
                     left, right = (round(cx - h * 0.18), round(cx + h * 0.045))
                     icon_left, icon_right = (round(cx + h * 0.049), round(cx + h * 0.115))
                     if min(top, left) < 0 or bottom > h or icon_right > w:
-                        return None
-                    else:
-                        if not _currency_present(frame[top:bottom, icon_left:icon_right], index):
-                            amounts.append(None)
-                            continue
-                        else:
-                            amounts.append(_read_amount(frame[top:bottom, left:right], limit, vision))
-                return tuple(amounts)
+                        row_vals = None
+                        break
+                    if not _currency_present(frame[top:bottom, icon_left:icon_right], index):
+                        row_vals.append(None)
+                        continue
+                    row_vals.append(_read_amount(frame[top:bottom, left:right], limit, vision))
+                if row_vals is not None:
+                    amounts = tuple(row_vals)
+            if amounts is None or amounts[0] is None or amounts[1] is None:
+                # Try 2-row result layout (when no Dark Elixir row is displayed on screen)
+                cx2, cy2 = (round(w * 0.501), round(h * 0.440))
+                t2_0 = round(cy2 + 0.018 * h)
+                b2_0 = t2_0 + round(h * 0.064)
+                t2_1 = round(cy2 + (0.018 + 0.074) * h)
+                b2_1 = t2_1 + round(h * 0.064)
+                ic2_l, ic2_r = (round(cx2 + h * 0.035), round(cx2 + h * 0.115))
+                if (
+                    0 <= t2_0 < b2_0 <= h
+                    and 0 <= t2_1 < b2_1 <= h
+                    and 0 <= ic2_l < ic2_r <= w
+                    and _currency_present(frame[t2_0:b2_0, ic2_l:ic2_r], 0)
+                    and _currency_present(frame[t2_1:b2_1, ic2_l:ic2_r], 1)
+                ):
+                    g2 = _read_amount(frame[t2_0:b2_0, round(cx2 - h * 0.18):round(cx2 + h * 0.035)], RESULT_LIMITS[0], vision)
+                    e2 = _read_amount(frame[t2_1:b2_1, round(cx2 - h * 0.18):round(cx2 + h * 0.035)], RESULT_LIMITS[1], vision)
+                    if g2 is not None and e2 is not None:
+                        return (g2, e2, 0)
+            return amounts
 def read_raid_bonus(frame, vision=VisionService):
     """Read the separate percentage Bonus panel on an already verified result.\n\nThe caller must first recognize the battle result. An absent or not-yet-\nvisible panel stays unknown; it never means a guessed zero bonus.\n"""
     if frame is None or not getattr(frame, 'size', 0):

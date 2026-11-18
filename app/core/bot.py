@@ -1192,7 +1192,7 @@ deselect, which would eat the upcoming Attack click.'''
             if not x:
                 continue
             logger.info('Dismissing popup control %s at (%d, %d)', name, int(x), int(y))
-            self.input.click(x, y, pause = 0.45 if name == 'panel_x.png' else 0.15)
+            self.input.click(x, y, pause = 0.45 if name == 'panel_x.png' else 0.2, rand = False)
             return True
         return False
 
@@ -2012,7 +2012,10 @@ deselect, which would eat the upcoming Attack click.'''
                 return None
         (bx, by) = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout = 5, error = False)
         if bx:
-            self.input.click(bx, by, pause = 0.1)
+            self.input.click(bx, by, pause = 0.35, rand = False)
+            ox, oy = self._find_template_once('okay.png')
+            if ox:
+                self.input.click(ox, oy, pause = 0.3, rand = False)
         return None
     def _return_home(self):
         '''Dismiss Okay if present, then wait for ``returnhome.png`` (+ ``returnhome2.png`` on 16:10) or ``chestclaim.png`` (mutually exclusive).'''
@@ -2032,6 +2035,7 @@ deselect, which would eat the upcoming Attack click.'''
     def _wait_for_return_home_or_chest_claim(self, timeout=15):
         """\nPoll one frame for ``okay.png`` (if surrendering/ending battle), ``returnhome.png`` (+ ``returnhome2.png`` on 16:10 only) then ``chestclaim.png``.\nReturns (``\"return\"`` | ``\"chest\"``, x, y) or (None, None, None) on timeout.\n"""
         start = time.time()
+        poll_idx = 0
         while time.time() - start < timeout:
             self._check_stop()
             frame = self.window.screenshot()
@@ -2051,7 +2055,7 @@ deselect, which would eat the upcoming Attack click.'''
                 return (None, None, None)
             ox, oy = self.vision.find_template(frame, 'okay.png')
             if ox:
-                self.input.click(ox, oy, pause=0.2)
+                self.input.click(ox, oy, pause=0.2, rand=False)
                 start = time.time()
                 if self.stop_event.wait(0.4):
                     self._check_stop()
@@ -2075,13 +2079,15 @@ deselect, which would eat the upcoming Attack click.'''
             if ax:
                 self._finish_unread_raid('home reached directly after ending battle')
                 return (None, None, None)
-            for tpl in returnhome_tpls:
-                rx, ry = self._match_ui_control(frame, tpl, region=bot_roi)
+            if poll_idx >= 3 and poll_idx % 3 == 0:
+                for tpl in returnhome_tpls:
+                    rx, ry = self._match_ui_control(frame, tpl, region=bot_roi)
+                    if rx:
+                        break
                 if rx:
-                    break
-            if rx:
-                self._record_raid_result(frame)
-                return ('return', rx, ry)
+                    self._record_raid_result(frame)
+                    return ('return', rx, ry)
+            poll_idx += 1
             if self.stop_event.wait(0.4):
                 self._check_stop()
                 return (None, None, None)

@@ -195,7 +195,28 @@ class AttackStrategy:
         return (int(round(cx)), int(round(cy)))
 
     
+    def _battlefield_outer_grass_segment(self, side=None):
+        """Visible outer dark-green grass border on 16:9 battlefield max zoom-out."""
+        if side is None:
+            side = random.choice(('left', 'right'))
+        if side == 'left':
+            p1 = self.config.scale_point([45, 430])
+            p2 = self.config.scale_point([655, 16])
+        else:
+            p1 = self.config.scale_point([1905, 16])
+            p2 = self.config.scale_point([2515, 430])
+        return ((float(p1[0]), float(p1[1])), (float(p2[0]), float(p2[1])))
+
     def _get_hero_deploy_point(self, frame = None):
+        if self.config.aspect_key == ASPECT_16_9:
+            (c1x, c1y), (c2x, c2y) = self._battlefield_outer_grass_segment()
+            t = random.uniform(0.08, 0.92)
+            xf = c1x + (c2x - c1x) * t
+            yf = c1y + (c2y - c1y) * t
+            if frame is not None and getattr(frame, 'size', 0):
+                (fh, fw) = frame.shape[:2]
+                return self._quantize_deploy_to_frame(xf, yf, fw, fh)
+            return (int(round(xf)), int(round(yf)))
         c_name = random.choice([
             'top',
             'right',
@@ -374,6 +395,13 @@ If L,T,R are collinear, uses a quadratic Bezier with control point chosen so t=0
 
     
     def _random_diamond_perimeter_point(self, frame):
+        if self.config.aspect_key == ASPECT_16_9:
+            (x1, y1), (x2, y2) = self._battlefield_outer_grass_segment()
+            t = random.uniform(0.08, 0.92)
+            xf = x1 + (x2 - x1) * t
+            yf = y1 + (y2 - y1) * t
+            (fh, fw) = frame.shape[:2]
+            return self._quantize_deploy_to_frame(xf, yf, fw, fh)
         (c1, c2) = random.choice(_DIAMOND_EDGES)
         (x1, y1) = self._point(c1)
         (x2, y2) = self._point(c2)
