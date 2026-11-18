@@ -111,6 +111,7 @@ def read_raid_result(frame, vision=VisionService):
             if not (0 <= top0 < bot0 <= h and 0 <= ic_l0 < ic_r0 <= w and _currency_present(frame[top0:bot0, ic_l0:ic_r0], 0)):
                 cx, cy = find_ui_label(frame, vision, ('You got', 'YOU GOT', 'You Got'), region=(round(w * 0.40), round(h * 0.35), round(w * 0.20), round(h * 0.12)))
             amounts = None
+            has_3row_elixir = False
             if cx is not None:
                 row_vals = []
                 for index, limit in enumerate(RESULT_LIMITS):
@@ -124,10 +125,12 @@ def read_raid_result(frame, vision=VisionService):
                     if not _currency_present(frame[top:bottom, icon_left:icon_right], index):
                         row_vals.append(None)
                         continue
+                    if index == 1:
+                        has_3row_elixir = True
                     row_vals.append(_read_amount(frame[top:bottom, left:right], limit, vision))
                 if row_vals is not None:
                     amounts = tuple(row_vals)
-            if amounts is None or amounts[0] is None or amounts[1] is None:
+            if not has_3row_elixir and (amounts is None or amounts[0] is None or amounts[1] is None):
                 # Try 2-row result layout (when no Dark Elixir row is displayed on screen)
                 cx2, cy2 = (round(w * 0.501), round(h * 0.440))
                 t2_0 = round(cy2 + 0.018 * h)

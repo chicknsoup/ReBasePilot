@@ -255,6 +255,8 @@ class Bot:
                     bonus = corroborate_results(bonus_reads)
                     if all((value is not None for value in amounts)):
                         break
+            if all((value is not None for value in amounts)) and bonus == UNKNOWN:
+                bonus = (0, 0, 0)
             if amounts == UNKNOWN or any(value is None for value in amounts):
                 # Every read failed — the 'You got' anchor or number geometry does not
                 # match this screen. Dump one frame so the pass can be recalibrated

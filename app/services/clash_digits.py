@@ -95,8 +95,8 @@ def read_price_digits(image, *, min_digits=4, white_only=False):
         return None
     if not white_only:
         return _read_price_digits_at_floor(image, 180, min_digits=min_digits, white_only=False, min_margin=0.02)
-    for floor in (190, 195, 185, 180):
-        reading = _read_price_digits_at_floor(image, floor, min_digits=min_digits, white_only=True, min_margin=0.008)
+    for floor in (215, 210, 205, 200, 195, 190, 185, 180):
+        reading = _read_price_digits_at_floor(image, floor, min_digits=min_digits, white_only=True, min_margin=0.0001)
         if reading is not None and reading.score >= 0.84:
             return reading
     return None
