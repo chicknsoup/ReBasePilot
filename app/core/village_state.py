@@ -11,7 +11,7 @@ from app.core.upgrade_menu import parse_builder_chip, parse_lab_chip
 from app.services.vision import VisionService
 from app.utils.logger import setup_logger
 logger = setup_logger('VillageState')
-_IMPLAUSIBLE_HUD_MAIN = 30000000
+_IMPLAUSIBLE_HUD_MAIN = 50000000
 @dataclass(frozen=True)
 class VillageState:
     builders: Optional[Tuple[int, int]]
@@ -68,7 +68,7 @@ def read_hud_resources_stable(capture, wait, attempts=4):
             else:
                 current = VisionService.parse_hud_resources_triplet(VisionService.extract_top_right_hud_numbers(frame)) or (None, None, None)
             for index, value in enumerate(current):
-                limit = 2000000 if index == 2 else _IMPLAUSIBLE_HUD_MAIN
+                limit = 5000000 if index == 2 else _IMPLAUSIBLE_HUD_MAIN
                 if value is None or value > limit:
                     previous[index] = None
                 else:

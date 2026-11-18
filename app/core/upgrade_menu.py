@@ -66,6 +66,7 @@ def _detect_upgrade_cards(frame, research):
         return None
     title = None
     for reg, up, cfg_str in (
+        ((int(fw * 0.78), 0, int(fw * 0.185), max(1, int(fh * 0.065))), 3, '--psm 7'),
         ((int(fw * 0.65), 0, fw - int(fw * 0.65), max(1, int(fh * 0.08))), 2, '--psm 7'),
         ((int(fw * 0.5), 0, fw - int(fw * 0.5), max(1, int(fh * 0.14))), 3, ''),
     ):

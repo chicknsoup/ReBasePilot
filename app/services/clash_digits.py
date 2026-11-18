@@ -15,11 +15,12 @@ class DigitReading:
     value: int
     bbox: tuple
     score: float
-def price_ink(image, floor=180):
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+def price_ink(image, floor=180, *, white_only=False):
     ink = cv2.inRange(image, (floor, floor, floor), (255, 255, 255))
-    ink |= cv2.inRange(hsv, (0, 100, 180), (6, 255, 255))
-    ink |= cv2.inRange(hsv, (174, 100, 180), (180, 255, 255))
+    if not white_only:
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        ink |= cv2.inRange(hsv, (0, 100, 180), (6, 255, 255))
+        ink |= cv2.inRange(hsv, (174, 100, 180), (180, 255, 255))
     return ink
 def normalize_glyph(mask):
     height, width = mask.shape
@@ -46,11 +47,8 @@ def load_digit_bank():
             raise ValueError('Incomplete Clash price digit atlas')
         else:
             return (np.stack(masks), np.array(digits), np.array([mask.sum() for mask in masks]))
-def read_price_digits(image, *, min_digits=4):
-    """Return a complete high-confidence price, or None; never fill missing digits."""
-    if image is None or not image.size:
-        return None
-    ink = price_ink(image)
+def _read_price_digits_at_floor(image, floor, *, min_digits=4, white_only=False, min_margin=0.02):
+    ink = price_ink(image, floor=floor, white_only=white_only)
     _, _, stats, _ = cv2.connectedComponentsWithStats(ink)
     candidates = [tuple(map(int, box[:4])) for box in stats[1:] if box[4] >= 4 and box[3] >= 4]
     if not candidates:
@@ -81,10 +79,24 @@ def read_price_digits(image, *, min_digits=4):
         per_digit = [float(similarities[labels == digit].max()) for digit in range(10)]
         order = np.argsort(per_digit)
         best, second = (int(order[(-1)]), int(order[(-2)]))
-        if per_digit[best] < 0.82 or per_digit[best] - per_digit[second] < 0.02:
+        margin = per_digit[best] - per_digit[second]
+        if per_digit[best] < 0.82 or margin < min_margin:
             return None
         digits.append(str(best))
         scores.append(per_digit[best])
     left, top = (min((b[0] for b in boxes)), min((b[1] for b in boxes)))
     right, bottom = (max((b[0] + b[2] for b in boxes)), max((b[1] + b[3] for b in boxes)))
     return DigitReading(int(''.join(digits)), (left, top, right - left, bottom - top), min(scores))
+
+
+def read_price_digits(image, *, min_digits=4, white_only=False):
+    """Return a complete high-confidence price, or None; never fill missing digits."""
+    if image is None or not image.size:
+        return None
+    if not white_only:
+        return _read_price_digits_at_floor(image, 180, min_digits=min_digits, white_only=False, min_margin=0.02)
+    for floor in (190, 195, 185, 180):
+        reading = _read_price_digits_at_floor(image, floor, min_digits=min_digits, white_only=True, min_margin=0.008)
+        if reading is not None and reading.score >= 0.84:
+            return reading
+    return None

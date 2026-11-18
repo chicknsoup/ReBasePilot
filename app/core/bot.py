@@ -6,7 +6,7 @@
 import re
 import time
 from app.core.battle_rewards import BattleRewards
-from app.core.ui_navigation import find_battle_button, find_navigation_fallback, find_ui_label, is_village_hud
+from app.core.ui_navigation import find_battle_button, find_buildings_tab, find_navigation_fallback, find_ui_label, is_village_hud
 import random
 import threading
 import cv2
@@ -396,6 +396,12 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
                         self._last_wall_remaining = cnt if cnt is not None else 1
                         return (frame, row.center)
                 return (frame, None)
+            elif (
+                getattr(getattr(self, '_advisor', None), '_using_build_menu', False)
+                or find_buildings_tab(frame, self.vision)[0] is not None
+                or (get_template_path('panel_x.png').exists() and self.vision.find_template(frame, 'panel_x.png')[0] is not None)
+            ):
+                return (frame, None)
             else:
                 fh, fw = frame.shape[:2]
                 for white in [False, True]:
@@ -495,7 +501,22 @@ deselect, which would eat the upcoming Attack click.'''
                 self.input.click(rlx, rly, pause=1.0)
                 self._wait_for_village_after_reload()
                 return
-        self._dismiss_open_popup()
+        if self.stop_event.wait(0.35):
+            return
+        for _ in range(2):
+            if not self._dismiss_open_popup():
+                break
+            if self.stop_event.wait(0.35):
+                return
+        frame2 = self.window.screenshot()
+        if frame2 is not None and getattr(frame2, 'size', 0) > 0:
+            self._update_config_size(frame2)
+            if (
+                find_buildings_tab(frame2, self.vision)[0] is not None
+                or (get_template_path('panel_x.png').exists() and self.vision.find_template(frame2, 'panel_x.png')[0] is not None)
+            ):
+                self._dismiss_okay_or_exit_on_frame(frame2)
+                return
         self.input.click(pause = 0.35, *self.config.get_point('empty'))
         self._dismiss_open_popup()
     def _maybe_upgrade_walls(self, upgrade_walls):
@@ -1171,7 +1192,7 @@ deselect, which would eat the upcoming Attack click.'''
             if not x:
                 continue
             logger.info('Dismissing popup control %s at (%d, %d)', name, int(x), int(y))
-            self.input.click(x, y, pause = 0.15)
+            self.input.click(x, y, pause = 0.45 if name == 'panel_x.png' else 0.15)
             return True
         return False
 
@@ -1730,10 +1751,11 @@ deselect, which would eat the upcoming Attack click.'''
                 else:
                     self.input.click(rx, ry, pause=0.3)
             else:
-                rx, ry = self._wait_for_image('rankedattackconfirm.png', timeout=1.5, error=False)
-                if rx:
-                    logger.info('Confirm Attack modal appeared after attack2.png — clicking Attack! (%d, %d)', rx, ry)
-                    self.input.click(rx, ry, pause=0.3)
+                if not self.stop_event.wait(0.35):
+                    rx, ry = self._find_template_once('rankedattackconfirm.png')
+                    if rx:
+                        logger.info('Confirm Attack modal appeared after attack2.png — clicking Attack! (%d, %d)', rx, ry)
+                        self.input.click(rx, ry, pause=0.3)
         live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=6, error=False)
         for _ in range(3):
             if live_x is not None:
@@ -1800,7 +1822,7 @@ deselect, which would eat the upcoming Attack click.'''
         if self.stop_event.wait(0.05):
             self._check_stop()
             return
-        self.input.scroll(cx, cy, 3)
+        self.input.scroll(cx, cy, 12)
         if self.stop_event.wait(0.2):
             self._check_stop()
             return
@@ -2379,23 +2401,25 @@ deselect, which would eat the upcoming Attack click.'''
         else:
             self._update_config_size(frame)
             top_roi = VisionService.top_half_region(frame)
+            bot_roi = VisionService.bottom_half_region(frame)
+            if self.vision.find_template(frame, 'mbuilder.png', region=top_roi)[0] is not None:
+                return 'builder'
+            if self._find_home_village_builder(frame, top_roi)[0] is not None:
+                return 'home'
+            if (
+                self.vision.find_template(frame, 'attack.png', region=bot_roi)[0] is not None
+                or self.vision.find_template(frame, 'build.png', region=bot_roi)[0] is not None
+            ):
+                return 'home'
             mx, my = self._match_ui_control(frame, 'mbuilder.png', region=top_roi)
             if mx:
                 return 'builder'
-            else:
-                hx, hy = self._find_home_village_builder(frame, top_roi)
-                if hx:
+            for template in _HOME_VILLAGE_BUILDER_TEMPLATES:
+                if self._match_ui_control(frame, template, region=top_roi)[0] is not None:
                     return 'home'
-                else:
-                    for template in _HOME_VILLAGE_BUILDER_TEMPLATES:
-                        if self._match_ui_control(frame, template, region=top_roi)[0] is not None:
-                            return 'home'
-                    bot_roi = VisionService.bottom_half_region(frame)
-                    if self.vision.find_template(frame, 'attack.png', region=bot_roi)[0] is not None:
-                        return 'home'
-                    if find_battle_button(frame, self.vision)[0] is not None or is_village_hud(frame, self.vision):
-                        return 'home'
-                    return None
+            if find_battle_button(frame, self.vision)[0] is not None or is_village_hud(frame, self.vision):
+                return 'home'
+            return None
     def _go_to_builder_base_with_boat(self):
         '''Home Village → Builder Base via ``boat.png``.'''
         self._check_stop()
@@ -2661,6 +2685,7 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
         """First ordered template match wins (checked left-to-right each frame)."""
         start = time.time()
         reload_warned = 0
+        poll_idx = 0
         while time.time() - start < timeout:
             self._check_stop()
             frame = self.window.screenshot()
@@ -2697,11 +2722,13 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
                 x, y = self.vision.find_template(frame, template, threshold=threshold, region=regions[template])
                 if x:
                     return (x, y)
-            # pass 2: navigation-label OCR fallback only if no art matched
-            for template in templates:
-                x, y = self._match_ui_control(frame, template, threshold=threshold, region=regions[template])
-                if x:
-                    return (x, y)
+            # pass 2: navigation-label OCR fallback only periodically after initial cloud polls
+            if poll_idx >= 3 and poll_idx % 3 == 0:
+                for template in templates:
+                    x, y = self._match_ui_control(frame, template, threshold=threshold, region=regions[template])
+                    if x:
+                        return (x, y)
+            poll_idx += 1
             if self.stop_event.wait(0.5):
                 self._check_stop()
                 return (None, None)

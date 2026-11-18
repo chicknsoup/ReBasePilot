@@ -1208,11 +1208,12 @@ with ``psm10_glyph_confidence``, labels include the estimated confidence.
                 return chars
             except pytesseract.TesseractNotFoundError:
                 VisionService._log_tesseract_missing()
-                
-                try:
-                    return None
-                except ValueError:
-                    []
+                return []
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                logger.warning('find_chars_ocr failed: %s', exc)
+                return []
         @staticmethod
         def find_words_ocr(screen_img, region = None, *, query = None, min_confidence = 30, case_sensitive = False, preprocess = True, white_text = False, tesseract_config = '--psm 11', match_alnum_only = False, fuzzy_min_ratio = None, cc_filter_blobs = False, cc_min_area = None, cc_max_area = None, brightness_floor = None, save_preprocess_png = None, roi_upscale = 1, ocr_debug_tsv_path = None, ocr_debug_boxes_png_path = None):
             '''
@@ -1293,6 +1294,11 @@ Returns:
                 return words
             except pytesseract.TesseractNotFoundError:
                 VisionService._log_tesseract_missing()
+                return []
+            except InterruptedError:
+                raise
+            except Exception as exc:
+                logger.warning('find_words_ocr failed: %s', exc)
                 return []
 
 
@@ -1556,8 +1562,8 @@ with one inner list per Y-cluster (characters left-to-right) after clustering, f
                     if allow_partial:
                         continue
                     return []
-                max_val = 2000000 if index == 2 else 30000000
-                glyphs = read_price_digits(crop, min_digits=1)
+                max_val = 5000000 if index == 2 else 50000000
+                glyphs = read_price_digits(crop, min_digits=1, white_only=True)
                 if glyphs is not None and glyphs.score >= 0.84 and 0 <= glyphs.value <= max_val:
                     groups.append(GroupedNumber(left=left, top=top, width=right - left, height=roi_height, text=str(glyphs.value), confidence=float(glyphs.score * 100.0)))
                     continue

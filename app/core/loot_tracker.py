@@ -34,8 +34,8 @@ def _read_amount(crop, limit, vision):
         return
     try:
         from app.services.clash_digits import read_price_digits
-        glyphs = read_price_digits(crop)
-        if glyphs is not None and glyphs.score >= 0.85 and 0 <= glyphs.value <= limit:
+        glyphs = read_price_digits(crop, min_digits=1, white_only=True)
+        if glyphs is not None and glyphs.score >= 0.84 and 0 <= glyphs.value <= limit:
             return glyphs.value
     except Exception:
         pass
