@@ -379,7 +379,45 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
                 return val
         return None
 
-    def _find_wall_row_once(self):
+    @staticmethod
+    def _find_placement_cancel_x(frame):
+        """Detect the red 'X' next to the green '✓' shown when placing a new building/wall."""
+        if frame is None or getattr(frame, 'size', 0) == 0:
+            return (None, None)
+        h, w = frame.shape[:2]
+        x0, y0 = int(w * 0.2), int(h * 0.2)
+        roi = frame[y0:int(h * 0.8), x0:int(w * 0.8)]
+        if roi.size == 0:
+            return (None, None)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        red = cv2.inRange(hsv, (0, 140, 150), (8, 255, 255)) | cv2.inRange(hsv, (172, 140, 150), (180, 255, 255))
+        grn = cv2.inRange(hsv, (42, 140, 150), (75, 255, 255))
+        wht = cv2.inRange(roi, (215, 215, 215), (255, 255, 255))
+        s = h / 731.0
+        lo, hi = max(10, int(14 * s)), max(16, int(42 * s))
+        min_area = max(60, int(110 * s * s))
+        cr = [
+            tuple(map(int, b[:5]))
+            for b in cv2.connectedComponentsWithStats(red)[2][1:]
+            if lo <= b[2] <= hi and lo <= b[3] <= hi and b[4] >= min_area
+            and cv2.countNonZero(wht[b[1]:b[1] + b[3], b[0]:b[0] + b[2]]) / max(1, b[2] * b[3]) >= 0.08
+        ]
+        cg = [
+            tuple(map(int, b[:5]))
+            for b in cv2.connectedComponentsWithStats(grn)[2][1:]
+            if lo <= b[2] <= hi and lo <= b[3] <= hi and b[4] >= min_area
+            and cv2.countNonZero(wht[b[1]:b[1] + b[3], b[0]:b[0] + b[2]]) / max(1, b[2] * b[3]) >= 0.08
+        ]
+        for r in cr:
+            rcy = r[1] + r[3] / 2.0
+            for g in cg:
+                gcy = g[1] + g[3] / 2.0
+                dx = g[0] - r[0]
+                if abs(rcy - gcy) <= max(6, int(10 * s)) and int(18 * s) <= dx <= int(58 * s):
+                    return (x0 + r[0] + r[2] // 2, y0 + r[1] + r[3] // 2)
+        return (None, None)
+
+    def _find_wall_row_once(self, *, skip_single_unbuilt=False):
         """One fresh screenshot → Wall label OCR, both polarities (dark popup text first).\n\nReturns ``(frame, point)``; the frame comes back so the caller can tell a list\nthat is still travelling from one that has hit its bottom without paying for a\nsecond capture.\n"""
         frame = self.window.screenshot()
         if frame is None:
@@ -391,10 +429,12 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
             if layout is not None:
                 wall_target = UpgradeRow('Wall', '', None, None, None, (0, 0), 0)
                 for row in parse_builder_menu(frame, batch_labels=True, target=wall_target, layout=layout):
-                    if is_wall_row(row) and row.section != 'in_progress':
+                    if is_wall_row(row) and row.section not in ('in_progress', 'new'):
+                        cnt = self._extract_wall_count_from_text(row.label)
+                        if skip_single_unbuilt and (cnt is None or cnt <= 1):
+                            continue
                         if row.cost is not None:
                             self._last_wall_unit_cost = int(row.cost)
-                        cnt = self._extract_wall_count_from_text(row.label)
                         self._last_wall_remaining = cnt if cnt is not None else 1
                         return (frame, row.center)
                 return (frame, None)
@@ -1015,7 +1055,7 @@ deselect, which would eat the upcoming Attack click.'''
                     else:
                         logger.info('Wall upgrade: batch still unaffordable after remove %d/%d', attempt + 1, _WALL_REMOVE_ATTEMPTS)
         return (frame, pair)
-    def _upgrade_walls(self):
+    def _upgrade_walls(self, _skip_unbuilt=False):
         """Open builder menu, scroll to Wall, add walls → remove if both red → Okay."""
         if getattr(self, '_advisor', None) is None:
             self._advisor = UpgradeAdvisor(self.window, self.input, self.vision, self.config, self.stop_event)
@@ -1032,7 +1072,7 @@ deselect, which would eat the upcoming Attack click.'''
         stalls = 0
         for _ in range(_WALL_MENU_SCROLL_STEPS * 2):
             self._check_stop()
-            frame, found = self._find_wall_row_once()
+            frame, found = self._find_wall_row_once(skip_single_unbuilt=_skip_unbuilt)
             if found:
                 if candidate and abs(found[1] - candidate[1]) <= self.config.scale_scalar(_WALL_ROW_STABLE_TOL):
                     wall_pt = found
@@ -1094,6 +1134,13 @@ deselect, which would eat the upcoming Attack click.'''
                 self._check_stop()
                 return
         if not umx:
+            px, py = self._find_placement_cancel_x(frame)
+            if px is not None:
+                logger.info('Wall upgrade: clicked unbuilt/New Wall placement overlay — cancelling at (%d, %d)%s', px, py, ' and retrying past New section' if not _skip_unbuilt else '')
+                self.input.click(px, py, pause=0.45, rand=False)
+                if not _skip_unbuilt:
+                    return self._upgrade_walls(_skip_unbuilt=True)
+                return
             logger.info('Wall upgrade: upgrademore.png not visible after Wall row click — dismissing and skipping this pass')
             if frame is not None:
                 try:
@@ -1195,6 +1242,11 @@ deselect, which would eat the upcoming Attack click.'''
                 continue
             logger.info('Dismissing popup control %s at (%d, %d)', name, int(x), int(y))
             self.input.click(x, y, pause = 0.45 if name == 'panel_x.png' else 0.2, rand = False)
+            return True
+        px, py = self._find_placement_cancel_x(frame)
+        if px is not None:
+            logger.info('Dismissing building placement overlay via X at (%d, %d)', px, py)
+            self.input.click(px, py, pause = 0.4, rand = False)
             return True
         return False
 

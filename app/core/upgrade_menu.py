@@ -15,6 +15,7 @@ from app.services.vision import VisionService, OcrWordBox
 from app.services.clash_digits import read_price_digits
 from app.utils.logger import setup_logger
 logger = setup_logger('UpgradeMenu')
+SECTION_NEW = 'new'
 SECTION_IN_PROGRESS = 'in_progress'
 SECTION_SUGGESTED = 'suggested'
 SECTION_OTHER = 'other'
@@ -147,14 +148,13 @@ def _card_red_fraction(patch):
 def _parse_build_cards(frame, layout, initial_section, batch_labels=False, target=None):
     headers = []
     previous_bottom = layout.title_bottom
-    if target is None or not is_wall_row(target):
-        for cx, cy, cw, ch in layout.cards:
-            if cy - previous_bottom >= frame.shape[0] * 0.02:
-                words = VisionService.find_words_ocr(frame, region=(int(cx + cw * 0.1), previous_bottom + 2, int(cw * 0.8), max(1, cy - previous_bottom - 4)), preprocess=False, roi_upscale=3, tesseract_config='--psm 7')
-                section = _match_section_header(_line_text(words))
-                if section:
-                    headers.append((previous_bottom, section))
-            previous_bottom = cy + ch
+    for cx, cy, cw, ch in layout.cards:
+        if cy - previous_bottom >= frame.shape[0] * 0.02:
+            words = VisionService.find_words_ocr(frame, region=(int(cx + cw * 0.1), previous_bottom + 2, int(cw * 0.8), max(1, cy - previous_bottom - 4)), preprocess=False, roi_upscale=3, tesseract_config='--psm 7')
+            section = _match_section_header(_line_text(words))
+            if section:
+                headers.append((previous_bottom, section))
+        previous_bottom = cy + ch
     rows = []
     batch_words = None
     if batch_labels:
@@ -263,6 +263,8 @@ def _line_text(words):
 
 
 _HEADER_CANON = (
+    ('newbuildings', SECTION_NEW),
+    ('new', SECTION_NEW),
     ('upgradesinprogress', SECTION_IN_PROGRESS),
     ('suggestedupgrades', SECTION_SUGGESTED),
     ('otherupgrades', SECTION_OTHER))
@@ -270,18 +272,17 @@ def _match_section_header(line_text):
     t = line_text.lower()
     if 'progress' in t:
         return SECTION_IN_PROGRESS
-    else:
-        if 'suggested' in t or 'recommended' in t:
-            return SECTION_SUGGESTED
-        else:
-            if 'other' in t and 'upgrade' in t:
-                return SECTION_OTHER
-            else:
-                compact = ''.join((ch for ch in t if ch.isalpha()))
-                for canon, section in _HEADER_CANON:
-                    if difflib.SequenceMatcher(None, compact, canon).ratio() >= 0.72:
-                        return section
-                return
+    if 'new' in t.split() or 'new building' in t or 'available' in t:
+        return SECTION_NEW
+    if 'suggested' in t or 'recommended' in t:
+        return SECTION_SUGGESTED
+    if 'other' in t and 'upgrade' in t:
+        return SECTION_OTHER
+    compact = ''.join((ch for ch in t if ch.isalpha()))
+    for canon, section in _HEADER_CANON:
+        if difflib.SequenceMatcher(None, compact, canon).ratio() >= 0.72:
+            return section
+    return
 def _split_digit_segments(chars):
     '''Split a line's digit chars (sorted by left) on large x-gaps → list of segments.'''
     chars = sorted(chars, key = (lambda c: c.left))
