@@ -123,7 +123,7 @@ class ResearchAdvisor(UpgradeAdvisor):
                         frame = self._frame()
                         layout = detect_research_menu(frame)
             if layout is not None:
-                self.input.scroll(*layout.scroll_point, 28, upward=True)
+                self.input.scroll(*layout.scroll_point, 28, upward=True, list_scroll=True)
                 if self.stop_event.wait(0.5):
                     return
                 else:

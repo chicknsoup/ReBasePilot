@@ -18,6 +18,12 @@ _EDRAG_CORNER_MARGIN = 100
 _DIAMOND_EDGES = (('left', 'top'), ('top', 'right'))
 _DEPLOY_BAR_SAFE_Y_FRAC = 0.80
 _CC_HEADER_BADGE_DEV_FLOOR = 15.0
+_HIGH_DPI_DIAMOND_16_9 = {
+    'left': (315, 645),
+    'top': (1280, -45),
+    'right': (2245, 645),
+    'bottom': (1280, 1345),
+}
 
 class AttackStrategy:
     '''Base class for attack strategies.'''
@@ -89,10 +95,11 @@ class AttackStrategy:
         fh, fw = frame.shape[:2]
         cx = int(left + tw // 2)
         cy = int(top + th // 2)
+        ui_s = max(0.85, min(1.45, float(getattr(VisionService, '_active_ui_scale', 1.0))))
 
-        xm0 = max(0, cx - max(3, int(round(fw * 0.0085))))
-        xm1 = max(xm0 + 2, cx - max(1, int(round(fw * 0.0015))))
-        ys0 = max(0, cy - int(round(fh * 0.075)))
+        xm0 = max(0, cx - max(3, int(round(fw * 0.0085 * ui_s))))
+        xm1 = max(xm0 + 2, cx - max(1, int(round(fw * 0.0015 * ui_s))))
+        ys0 = max(0, cy - int(round(fh * 0.075 * ui_s)))
         ys1 = max(ys0 + 4, int(top + th * 0.25))
         if xm1 > fw or ys1 > fh:
             return False
@@ -101,23 +108,23 @@ class AttackStrategy:
         min_gr = np.minimum(mid_strip[:, :, 1].mean(axis=1), mid_strip[:, :, 2].mean(axis=1))
         row_flat = mid_strip.std(axis=1).mean(axis=1)
         hdr_mask = (b_mean >= 135.0) & ((b_mean - min_gr) >= 40.0) & (row_flat <= 14.0)
-        min_run = max(3, int(round(fh * 0.005)))
+        min_run = max(3, int(round(fh * 0.005 * ui_s)))
         hy0 = None
         run = 0
         for r_idx, ok in enumerate(hdr_mask):
             if ok:
                 run += 1
                 if run == min_run:
-                    hy0 = ys0 + r_idx - min_run + max(1, int(round(fh * 0.003)))
+                    hy0 = ys0 + r_idx - min_run + max(1, int(round(fh * 0.003 * ui_s)))
                     break
             else:
                 run = 0
         if hy0 is None:
             return False
-        hy1 = min(fh, hy0 + max(4, int(round(fh * 0.014))))
+        hy1 = min(fh, hy0 + max(4, int(round(fh * 0.014 * ui_s))))
 
-        bx0 = max(0, cx - max(8, int(round(fw * 0.022))))
-        bx1 = max(bx0 + 2, cx - max(4, int(round(fw * 0.011))))
+        bx0 = max(0, cx - max(8, int(round(fw * 0.022 * ui_s))))
+        bx1 = max(bx0 + 2, cx - max(4, int(round(fw * 0.011 * ui_s))))
         if bx1 > fw or hy1 <= hy0:
             return False
         ref_bgr = np.median(frame[hy0:hy1, xm0:xm1].astype(np.float32), axis=(0, 1))
@@ -140,8 +147,31 @@ class AttackStrategy:
         return (None, None)
 
     
+    @staticmethod
+    def _ui_diamond_blend():
+        '''0.0 at standard 320-DPI UI scale (1.0x); 1.0 at 240-DPI UI scale (>=1.22x) where max zoom-out insets the 44x44 grass.'''
+        ui_s = float(getattr(VisionService, '_active_ui_scale', 1.0))
+        if ui_s <= 1.04:
+            return 0.0
+        return min(1.0, (ui_s - 1.04) / (1.22 - 1.04))
+
     def _point(self, key):
-        return self.config.get_point(key)
+        pt = self.config.get_point(key)
+        blend = self._ui_diamond_blend()
+        if blend <= 0.0 or key not in ('left', 'top', 'right', 'bottom'):
+            return pt
+        if self.config.aspect_key == ASPECT_16_9 and key in _HIGH_DPI_DIAMOND_16_9:
+            target = self.config.scale_point(_HIGH_DPI_DIAMOND_16_9[key])
+            return [
+                int(round(pt[0] + (target[0] - pt[0]) * blend)),
+                int(round(pt[1] + (target[1] - pt[1]) * blend)),
+            ]
+        cx, cy = self.config.scale_point([1280, 740])
+        shrink = 1.0 - 0.08 * blend
+        return [
+            int(round(cx + (pt[0] - cx) * shrink)),
+            int(round(cy + (pt[1] - cy) * shrink)),
+        ]
 
     
     def _scaled_deployment_data(self):
@@ -162,6 +192,7 @@ class AttackStrategy:
         random.shuffle(heroes)
         deployed_heroes = []
         roi = self.vision.bottom_half_region(frame)
+        can_verify = type(self.vision) is VisionService and getattr(self.input, 'window_service', None) is not None
         for hero in heroes:
             fresh, interrupted = self._reward_checkpoint()
             if fresh is not None:
@@ -174,13 +205,31 @@ class AttackStrategy:
                 continue
             deploy_point = self._get_hero_deploy_point(frame)
             self.input.click(bx, by, pause = random.uniform(0.15, 0.3), rand = False)
-            self.input.click(pause = random.uniform(0.15, 0.3), *deploy_point)
+            self.input.click(deploy_point[0], deploy_point[1], pause = random.uniform(0.15, 0.3), rand = False)
             # Remember the live, deployed appearance only for relocation after
             # a reward shifts the bar. Normal ability clicks retain main's slots.
-            live = self.input.window_service.screenshot() if self.event_handler else frame
+            live = self.input.window_service.screenshot() if (self.event_handler or can_verify) else frame
+            if can_verify and isinstance(live, np.ndarray) and live.size:
+                for _retry in range(2):
+                    if self.stop_event and self.stop_event.is_set():
+                        break
+                    live_roi = self.vision.bottom_half_region(live)
+                    rx, ry, rconf = self.vision.find_template_with_confidence(live, f'{hero}.png', threshold = 0.80, region = live_roi)
+                    if rx is None:
+                        break
+                    logger.info('Hero %s still undeployed in bar (conf=%.2f) — retrying deploy on outer grass', hero, rconf)
+                    bx, by = rx, ry
+                    alt_pt = self._get_hero_deploy_point(live)
+                    self.input.click(bx, by, pause = 0.18, rand = False)
+                    self.input.click(alt_pt[0], alt_pt[1], pause = 0.22, rand = False)
+                    nxt = self.input.window_service.screenshot()
+                    if isinstance(nxt, np.ndarray) and nxt.size:
+                        live = nxt
+                frame = live
+                roi = self.vision.bottom_half_region(frame)
             radius = max(8, round(frame.shape[0]*.025))
             tile = None
-            if live is not None and bx >= radius and by >= radius:
+            if live is not None and isinstance(live, np.ndarray) and bx >= radius and by >= radius:
                 tile = live[by-radius:by+radius, bx-radius:bx+radius].copy()
             deployed_heroes.append((bx, by, tile))
         while deployed_heroes:
@@ -217,10 +266,11 @@ class AttackStrategy:
 
     
     def _hero_corner_xy(self, corner):
-        '''Corner used when building hero deploy lines; on ``16_9``, ``top`` is nudge-scaled.'''
-        (px, py) = self.config.get_point(corner)
+        '''Corner used when building hero deploy lines; on ``16_9``, ``top`` is nudge-scaled at 1.0x UI scale.'''
+        (px, py) = self._point(corner)
         if self.config.aspect_key == ASPECT_16_9 and corner == 'top':
-            py -= self.config.scale_scalar(70)
+            nudge = int(round(self.config.scale_scalar(70) * (1.0 - self._ui_diamond_blend())))
+            py -= nudge
         return (int(px), int(py))
 
     
@@ -229,7 +279,9 @@ class AttackStrategy:
         '''Clamp to ``[0, fw-1]`` x ``[0, safe_max_y]`` above the bottom deploy bar.'''
         if fw <= 0 or fh <= 0:
             return (int(round(px)), int(round(py)))
-        max_y = max(0, min(fh - 1, int(round(fh * _DEPLOY_BAR_SAFE_Y_FRAC))))
+        ui_s = max(1.0, min(1.45, float(getattr(VisionService, '_active_ui_scale', 1.0))))
+        safe_frac = 1.0 - (1.0 - _DEPLOY_BAR_SAFE_Y_FRAC) * ui_s
+        max_y = max(0, min(fh - 1, int(round(fh * safe_frac))))
         cx = max(0, min(float(fw - 1), float(px)))
         cy = max(0, min(float(max_y), float(py)))
         return (int(round(cx)), int(round(cy)))
@@ -423,10 +475,11 @@ If L,T,R are collinear, uses a quadratic Bezier with control point chosen so t=0
         (x1, y1) = self._point(c1)
         (x2, y2) = self._point(c2)
         edge_len = math.hypot(x2 - x1, y2 - y1)
-        if edge_len <= 2 * _EDRAG_CORNER_MARGIN:
+        margin = float(self.config.scale_scalar(_EDRAG_CORNER_MARGIN))
+        if edge_len <= 2 * margin:
             t = 0.5
         else:
-            t_min = _EDRAG_CORNER_MARGIN / edge_len
+            t_min = margin / edge_len
             t_max = 1 - t_min
             t = random.uniform(t_min, t_max)
         xf = x1 + (x2 - x1) * t
@@ -557,6 +610,22 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
             else:
                 beat = delay * random.uniform(0.6, 1.6)
             self.input.click(px, py, pause = beat, rand = False)
+        if type(self.vision) is VisionService and getattr(self.input, 'window_service', None) is not None:
+            for _sweep in range(6):
+                if ev and ev.is_set():
+                    break
+                chk = self.input.window_service.screenshot()
+                if not isinstance(chk, np.ndarray) or not chk.size:
+                    break
+                self._sync_frame_size(chk)
+                chk_roi = self.vision.bottom_half_region(chk)
+                rx, ry = self._find_non_cc_template(chk, template_name, threshold = 0.76, region = chk_roi)
+                if rx is None:
+                    break
+                if _sweep == 0:
+                    self.input.click(rx, ry, pause = 0.18, rand = False)
+                (px, py) = self._random_diamond_perimeter_point(chk)
+                self.input.click(px, py, pause = 0.16, rand = False)
         return True
 
     

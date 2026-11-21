@@ -28,6 +28,9 @@ class InputService:
         self.user32 = ctypes.windll.user32
         self._last_active_hwnd = 0
         self._last_active_ts = 0.0
+    def _mumu(self):
+        ipc = getattr(self.window_service, 'mumu_ipc', None)
+        return ipc if getattr(ipc, 'is_mumu_ipc', False) is True else None
     def _ensure_surface_active(self, hwnd, *, force=False):
         """Ensure Google Play Games' CROSVM surface is the active/focused scanout.
 
@@ -39,7 +42,7 @@ class InputService:
         switches crosvm's foreground scanout and rebinds the touchscreen to the game
         display without stealing the user's OS foreground window or cursor.
         """
-        if not hwnd:
+        if not hwnd or self._mumu() is not None:
             return
         now = time.monotonic()
         if not force and hwnd == self._last_active_hwnd and (now - self._last_active_ts) < _SURFACE_ACTIVATE_INTERVAL_S:
@@ -117,6 +120,11 @@ class InputService:
         else:
             time.sleep(sleep_time)
     def _inject_click(self, x, y, hold=_CLICK_HOLD_S):
+        mumu = self._mumu()
+        if mumu is not None:
+            xc, yc = self._clamp_to_capture(int(x), int(y))
+            mumu.tap(xc, yc, hold_s=hold)
+            return
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
@@ -136,6 +144,11 @@ class InputService:
             y += random.randint(-spread, spread)
         self._inject_click(int(x), int(y), hold=_CLICK_AT_HOLD_S)
     def mouse_down(self, x, y):
+        mumu = self._mumu()
+        if mumu is not None:
+            xc, yc = self._clamp_to_capture(x, y)
+            mumu.touch_down(xc, yc)
+            return
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
@@ -144,6 +157,10 @@ class InputService:
             lparam = self._make_lparam(x, y)
             self._send_msg(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
     def mouse_up(self, x, y):
+        mumu = self._mumu()
+        if mumu is not None:
+            mumu.touch_up()
+            return
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
@@ -152,6 +169,12 @@ class InputService:
             self._send_msg(hwnd, WM_LBUTTONUP, 0, lparam)
     def move(self, x, y, wparam=0):
         """WM_MOUSEMOVE. Use ``wparam=MK_LBUTTON`` only while simulating a held drag (see ``human_move``)."""
+        mumu = self._mumu()
+        if mumu is not None:
+            if wparam & MK_LBUTTON:
+                xc, yc = self._clamp_to_capture(x, y)
+                mumu.touch_move(xc, yc)
+            return
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
@@ -162,7 +185,7 @@ class InputService:
         # irreducible cflow, using cdg fallback
         """Simulates human-like mouse movement using a Bezier curve and easing."""
         hwnd = self.window_service.hwnd
-        if not hwnd:
+        if not hwnd and self._mumu() is None:
             return
         else:
             mx = (x1 + x2) / 2
@@ -190,7 +213,30 @@ class InputService:
                 else:
                     time.sleep(0.005)
         self.move(x2, y2, MK_LBUTTON)
-    def scroll(self, x, y, amount, *, upward=False):
+    def scroll(self, x, y, amount, *, upward=False, list_scroll=False):
+        mumu = self._mumu()
+        if mumu is not None:
+            xc, yc = self._clamp_to_capture(x, y)
+            if list_scroll or upward:
+                sz = self.window_service.get_outer_pixel_size() or (1600, 900)
+                _, h = sz
+                if upward:
+                    swipes = min(4, max(1, (int(amount) + 7) // 8))
+                    y0 = max(int(h * 0.22), yc - int(h * 0.22))
+                    y1 = min(int(h * 0.84), yc + int(h * 0.28))
+                    for _ in range(swipes):
+                        if self.stop_event and self.stop_event.is_set():
+                            break
+                        mumu.drag(xc, y0, xc, y1, duration_s=0.18, steps=10, hold_end_s=0.02, stop_event=self.stop_event)
+                else:
+                    span = int(round(h * 0.14 * min(1.6, max(0.55, float(amount) / 4.0))))
+                    y0 = min(int(h * 0.82), yc + span)
+                    y1 = max(int(h * 0.18), yc - span)
+                    mumu.drag(xc, y0, xc, y1, duration_s=0.26, steps=14, hold_end_s=0.07, stop_event=self.stop_event)
+            else:
+                strokes = 1 if int(amount) <= 4 else (2 if int(amount) <= 8 else 3)
+                mumu.pinch_zoom_out(cx=xc, cy=yc, strokes=strokes, stop_event=self.stop_event)
+            return
         hwnd = self.window_service.hwnd
         if not hwnd:
             return

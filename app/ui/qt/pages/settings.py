@@ -218,8 +218,8 @@ class SettingsPage(QWidget):
         hdr.addWidget(
             HelpButton(
                 tooltip=(
-                    'Pick the Google Play Games window if auto-detect cannot find Clash of Clans.\n'
-                    'Windows with a detected CROSVM game surface are listed first.'
+                    'Pick the Google Play Games or MuMuPlayer window if auto-detect cannot find Clash of Clans.\n'
+                    'Windows with a detected game surface (CROSVM / MuMu) are listed first.'
                 ),
                 parent=card,
             )
@@ -704,7 +704,7 @@ class SettingsPage(QWidget):
             elif saved.is_set():
                 self._window_status.setText(f"Pinned window: {saved.title or '(saved)'}")
             else:
-                self._window_status.setText('Mode: Auto-detecting Google Play Games surface.')
+                self._window_status.setText('Mode: Auto-detecting Google Play Games / MuMuPlayer surface.')
             self._update_window_buttons()
         except Exception as exc:
             logger.warning(f'Could not enumerate windows: {exc}')
@@ -733,7 +733,7 @@ class SettingsPage(QWidget):
                 self._window_status.setText(problem.message)
                 return
             self._window_status.setText(
-                'No Google Play Games surface (CROSVM) under this window — open Clash, then Refresh and pick the game window.'
+                'No game surface (Google Play Games CROSVM or MuMuPlayer) under this window — open Clash, then Refresh and pick the game window.'
             )
             return
         ws = WindowService()

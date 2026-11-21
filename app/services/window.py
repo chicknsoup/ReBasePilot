@@ -11,6 +11,13 @@ import numpy as np
 import cv2
 from PIL import Image
 from typing import List, Optional, Tuple
+from app.services.mumu_ipc import (
+    MuMuIpcSession,
+    discover_running_mumu_instances,
+    is_mumu_sentinel_hwnd,
+    mumu_index_from_sentinel,
+    mumu_sentinel_hwnd,
+)
 from app.utils.logger import setup_logger
 from app.utils.window_settings_store import WindowSelection, load_window_selection
 logger = setup_logger('WindowService')
@@ -21,8 +28,18 @@ MK_LBUTTON = 1
 WM_MOUSEWHEEL = 522
 WHEEL_DELTA = 120
 _CHILD_CLASS_PREFIX = 'CROSVM'
+_MUMU_SURFACE_CLASSES = frozenset({'nemuwin', 'mumunxdevice'})
 _MINIMIZED_COORD = (-30000)
 _ENUM_WINDOWS_PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+
+def _is_mumu_surface_class(cls: str) -> bool:
+    low = (cls or '').lower()
+    return low in _MUMU_SURFACE_CLASSES or low.startswith('mumuipc')
+
+
+def _is_game_surface_class(cls: str) -> bool:
+    return (cls or '').upper().startswith(_CHILD_CLASS_PREFIX) or _is_mumu_surface_class(cls)
 @dataclass
 class WindowCandidate:
     """A visible top-level window plus its resolved Google Play Games game surface (if any)."""
@@ -67,6 +84,7 @@ class WindowService:
         self.window_name = window_name
         self.child_class = child_class
         self.hwnd = 0
+        self.mumu_ipc: Optional[MuMuIpcSession] = None
         self.user32 = ctypes.windll.user32
         self.gdi32 = ctypes.windll.gdi32
         self._configure_capture_api()
@@ -75,6 +93,58 @@ class WindowService:
             self.find_window()
         except Exception:
             self.user32.SetProcessDPIAware()
+
+    def _clear_mumu_ipc(self):
+        ipc = getattr(self, 'mumu_ipc', None)
+        if getattr(ipc, 'is_mumu_ipc', False) is True:
+            ipc.disconnect()
+        self.mumu_ipc = None
+
+    def _bind_mumu_ipc_instance(self, inst) -> bool:
+        ipc = getattr(self, 'mumu_ipc', None)
+        if ipc is not None and ipc.install_dir == inst.install_dir and ipc.instance_index == inst.instance_index and ipc.ensure_connected():
+            return True
+        self._clear_mumu_ipc()
+        session = MuMuIpcSession(inst.install_dir, inst.instance_index, dll_path=inst.dll_path)
+        if session.connect():
+            self.mumu_ipc = session
+            return True
+        return False
+
+    def _bind_mumu_for_candidate(self, surface_hwnd: int, title: str = '', surface_class: str = '') -> None:
+        if not is_mumu_sentinel_hwnd(surface_hwnd) and not _is_mumu_surface_class(surface_class):
+            self._clear_mumu_ipc()
+            return
+        instances = discover_running_mumu_instances()
+        if not instances:
+            self._clear_mumu_ipc()
+            return
+        if is_mumu_sentinel_hwnd(surface_hwnd):
+            wanted_idx = mumu_index_from_sentinel(surface_hwnd)
+            for inst in instances:
+                if inst.instance_index == wanted_idx:
+                    self._bind_mumu_ipc_instance(inst)
+                    return
+        low_cls = (surface_class or '').lower()
+        if low_cls.startswith('mumuipc_'):
+            try:
+                wanted_idx = int(low_cls.split('_', 1)[1])
+                for inst in instances:
+                    if inst.instance_index == wanted_idx:
+                        self._bind_mumu_ipc_instance(inst)
+                        return
+            except ValueError:
+                pass
+        if len(instances) == 1:
+            self._bind_mumu_ipc_instance(instances[0])
+            return
+        low_title = (title or '').strip().lower()
+        if low_title:
+            matched = [inst for inst in instances if inst.name.lower() in low_title or low_title in inst.name.lower()]
+            if len(matched) == 1:
+                self._bind_mumu_ipc_instance(matched[0])
+                return
+        self._clear_mumu_ipc()
     def _configure_capture_api(self):
         """Declare pointer-width handle types for 64-bit Windows capture calls."""
         # ***<module>.WindowService._configure_capture_api: Failure: Different bytecode
@@ -100,7 +170,7 @@ class WindowService:
         """
         target = hwnd or self.hwnd
         prev = None
-        if target and hasattr(self.user32, 'GetWindowDpiAwarenessContext') and hasattr(self.user32, 'SetThreadDpiAwarenessContext'):
+        if target and not is_mumu_sentinel_hwnd(target) and hasattr(self.user32, 'GetWindowDpiAwarenessContext') and hasattr(self.user32, 'SetThreadDpiAwarenessContext'):
             try:
                 ctx = self.user32.GetWindowDpiAwarenessContext(target)
                 if ctx:
@@ -133,13 +203,17 @@ class WindowService:
                     if self.hwnd:
                         logger.info(f'Window found via auto-detect fallback (HWND: {self.hwnd})')
                         return True
-                logger.warning(f'Window not found: {self.window_name} (expect a titled window with a {_CHILD_CLASS_PREFIX!r}* surface, either as the top-level window itself or a descendant — Google Play Games). Open Settings → Game window to pick it manually.')
+                logger.warning(f'Window not found: {self.window_name} (expect Google Play Games CROSVM* or a running MuMuPlayer instance). Open Settings → Game window to pick it manually.')
                 return False
     def _get_class(self, hwnd):
+        if is_mumu_sentinel_hwnd(hwnd):
+            return f'MuMuIPC_{mumu_index_from_sentinel(hwnd)}'
         buf = ctypes.create_unicode_buffer(256)
         self.user32.GetClassNameW(hwnd, buf, 256)
         return buf.value
     def _get_title(self, hwnd):
+        if is_mumu_sentinel_hwnd(hwnd):
+            return f'MuMuPlayer #{mumu_index_from_sentinel(hwnd)}'
         length = self.user32.GetWindowTextLengthW(hwnd)
         if length <= 0:
             return ''
@@ -148,7 +222,7 @@ class WindowService:
         return buff.value
     def _find_descendant(self, root_hwnd, predicate):
         '''Depth-first search for the first descendant whose class satisfies ``predicate``.'''
-        if not root_hwnd:
+        if not root_hwnd or is_mumu_sentinel_hwnd(root_hwnd):
             return (0, '')
         found = {
             'hwnd': 0,
@@ -172,25 +246,26 @@ class WindowService:
                 return (hwnd, cls)
         return self._find_descendant(root_hwnd, (lambda c: c.upper().startswith(_CHILD_CLASS_PREFIX)))
     def _resolve_surface(self, top_hwnd, top_class, preferred_class = ''):
-        '''Resolve the game surface for a top-level window.
-
-Google Play Games window topology varies across machines/builds:
-- Some have an outer ``HwndWrapper`` shell with a ``CROSVM*`` **descendant** (capture that).
-- Others expose ``CROSVM*`` as the **top-level window itself** (no wrapper); capture it directly.
-
-Returns ``(surface_hwnd, surface_class)`` or ``(0, "")`` when no surface is present.
-'''
+        '''Resolve the game surface for a top-level window (Google Play Games ``CROSVM*`` or MuMuPlayer ``nemuwin``).'''
+        if is_mumu_sentinel_hwnd(top_hwnd):
+            idx = mumu_index_from_sentinel(top_hwnd)
+            return (top_hwnd, preferred_class or f'MuMuIPC_{idx}')
         (hwnd, cls) = self._find_crosvm_descendant(top_hwnd, preferred_class)
         if hwnd:
             return (hwnd, cls)
         if top_class.upper().startswith(_CHILD_CLASS_PREFIX):
+            return (top_hwnd, top_class)
+        (mumu_hwnd, mumu_cls) = self._find_descendant(top_hwnd, _is_mumu_surface_class)
+        if mumu_hwnd:
+            return (mumu_hwnd, mumu_cls)
+        if _is_mumu_surface_class(top_class):
             return (top_hwnd, top_class)
         return (0, '')
     def enumerate_windows(self):
         '''List visible, titled top-level windows with their resolved game surface (if any).
 
 Used by the Settings picker so users can choose the right window when auto-detection
-fails. Candidates with a CROSVM surface are sorted first.
+fails. Candidates with a game surface (Google Play Games CROSVM or MuMuPlayer) are sorted first.
 '''
         IsWindowVisible = self.user32.IsWindowVisible
         candidates = []
@@ -205,12 +280,38 @@ fails. Candidates with a CROSVM surface are sorted first.
 
         cb = _ENUM_WINDOWS_PROC(enum_top_cb)
         self.user32.EnumWindows(cb, 0)
+        if not any(_is_mumu_surface_class(c.child_class) for c in candidates):
+            for inst in discover_running_mumu_instances():
+                sentinel = mumu_sentinel_hwnd(inst.instance_index)
+                candidates.append(
+                    WindowCandidate(
+                        top_hwnd=sentinel,
+                        title=f'MuMuPlayer ({inst.name})',
+                        top_class='MuMuPlayerIPC',
+                        child_hwnd=sentinel,
+                        child_class=f'MuMuIPC_{inst.instance_index}',
+                    )
+                )
         candidates.sort(key = (lambda c: (not (c.is_game), c.title.lower())))
         return candidates
     def enumerate_descendants(self, root_hwnd):
         '''All descendant windows of ``root_hwnd`` (class, title, size, depth) for diagnostics.'''
         if not root_hwnd:
             return []
+        if is_mumu_sentinel_hwnd(root_hwnd):
+            sz = self.window_pixel_size(root_hwnd)
+            idx = mumu_index_from_sentinel(root_hwnd)
+            return [
+                DescendantInfo(
+                    hwnd=root_hwnd,
+                    cls=f'MuMuIPC_{idx}',
+                    title='external_renderer_ipc',
+                    width=sz[0] if sz else 0,
+                    height=sz[1] if sz else 0,
+                    depth=0,
+                    is_surface=True,
+                )
+            ]
         results = []
         seen = set()
         def _depth_from_root(hwnd):
@@ -228,16 +329,35 @@ fails. Candidates with a CROSVM surface are sorted first.
                 seen.add(child_hwnd)
                 cls = self._get_class(child_hwnd)
                 size = self.window_pixel_size(child_hwnd)
-                results.append(DescendantInfo(hwnd = child_hwnd, cls = cls, title = self._get_title(child_hwnd), width = size[0] if size else 0, height = size[1] if size else 0, depth = _depth_from_root(child_hwnd), is_surface = cls.upper().startswith(_CHILD_CLASS_PREFIX)))
+                results.append(DescendantInfo(hwnd = child_hwnd, cls = cls, title = self._get_title(child_hwnd), width = size[0] if size else 0, height = size[1] if size else 0, depth = _depth_from_root(child_hwnd), is_surface = _is_game_surface_class(cls)))
             return True
 
         proc = _ENUM_WINDOWS_PROC(cb)
         self.user32.EnumChildWindows(root_hwnd, proc, 0)
         return results
     def window_pixel_size(self, hwnd):
-        '''Outer pixel size of any HWND via ``GetWindowRect`` (same basis as :meth:`screenshot`).'''
+        '''Outer pixel size of any HWND via IPC (for MuMu) or ``GetWindowRect`` (same basis as :meth:`screenshot`).'''
         if not hwnd:
             return None
+        ipc = getattr(self, 'mumu_ipc', None)
+        if ipc is not None and (hwnd == self.hwnd or is_mumu_sentinel_hwnd(hwnd)):
+            sz = ipc.get_display_size()
+            if sz is not None:
+                return sz
+        if is_mumu_sentinel_hwnd(hwnd):
+            idx = mumu_index_from_sentinel(hwnd)
+            for inst in discover_running_mumu_instances():
+                if inst.instance_index == idx:
+                    return (inst.width, inst.height)
+            return None
+        try:
+            cls = self._get_class(hwnd)
+            if _is_mumu_surface_class(cls):
+                instances = discover_running_mumu_instances()
+                if len(instances) == 1:
+                    return (instances[0].width, instances[0].height)
+        except Exception:
+            pass
 
         try:
             with self.window_dpi_context(hwnd):
@@ -261,6 +381,8 @@ fails. Candidates with a CROSVM surface are sorted first.
         # CROSVM surface directly without the wrapper.
         if wanted_class.startswith('HwndWrapper') and (candidate_class.startswith('HwndWrapper') or candidate_class.upper().startswith(_CHILD_CLASS_PREFIX)):
             return True
+        if (wanted_class.startswith('Qt') or wanted_class == 'MuMuPlayerIPC') and (candidate_class.startswith('Qt') or candidate_class == 'MuMuPlayerIPC'):
+            return True
         return False
     def _resolve_hwnd(self, selection):
         """Resolve the game-surface HWND from a pinned selection, or auto-detect when unset."""
@@ -276,9 +398,9 @@ fails. Candidates with a CROSVM surface are sorted first.
                         continue
                 if not self._top_class_matches(selection.top_class, cand.top_class):
                         continue
-                surface_hwnd, _ = self._resolve_surface(cand.top_hwnd, cand.top_class, selection.child_class)
+                surface_hwnd, surface_cls = self._resolve_surface(cand.top_hwnd, cand.top_class, selection.child_class)
                 if surface_hwnd:
-                    matches.append(surface_hwnd)
+                    matches.append((surface_hwnd, cand.title, surface_cls))
             if not matches and wanted_title.startswith(self.window_name.lower()):
                 # Google Play Games appends "- <AccountName>" to the Clash of Clans
                 # window title and updates it when switching Supercell ID accounts.
@@ -288,35 +410,82 @@ fails. Candidates with a CROSVM surface are sorted first.
                         continue
                     if not self._top_class_matches(selection.top_class, cand.top_class):
                         continue
-                    surface_hwnd, _ = self._resolve_surface(cand.top_hwnd, cand.top_class, selection.child_class)
+                    surface_hwnd, surface_cls = self._resolve_surface(cand.top_hwnd, cand.top_class, selection.child_class)
                     if surface_hwnd:
-                        matches.append(surface_hwnd)
+                        matches.append((surface_hwnd, cand.title, surface_cls))
+            if not matches and (_is_mumu_surface_class(selection.child_class) or selection.top_class == 'MuMuPlayerIPC'):
+                for cand in candidates:
+                    if _is_mumu_surface_class(cand.child_class):
+                        matches.append((cand.child_hwnd, cand.title, cand.child_class))
             if not matches:
+                self._clear_mumu_ipc()
                 return 0
             else:
                 if len(matches) > 1:
                     self._pin_ambiguous = True
+                    self._clear_mumu_ipc()
                     logger.warning('%d windows match the pinned selection %r — close the extra game window or give the clients distinct titles.', len(matches), selection.title)
                     return 0
                 else:
-                    return matches[0]
+                    chosen_hwnd, chosen_title, chosen_cls = matches[0]
+                    self._bind_mumu_for_candidate(chosen_hwnd, chosen_title, chosen_cls)
+                    return chosen_hwnd
     def _auto_detect_child(self):
-        """Default Google Play Games detection: a \'Clash of Clans\' window with a CROSVM surface.\n\nThe surface may be a descendant (under an ``HwndWrapper`` shell) or the top-level window\nitself. The CROSVM requirement alone excludes Chromium hosts (Discord, Chrome) that merely\nshare the title substring, so no outer-class gate is needed.\n"""
-        # ***<module>.WindowService._auto_detect_child: Failure: Different bytecode
+        """Auto-detect Google Play Games (``CROSVM*``) first, then running MuMuPlayer instances."""
         name = self.window_name.lower()
-        matches = [cand.child_hwnd for cand in self.enumerate_windows() if cand.is_game and (not name or name in cand.title.lower())]
-        if len(matches) > 1:
+        candidates = self.enumerate_windows()
+        crosvm_matches = [
+            cand.child_hwnd
+            for cand in candidates
+            if cand.is_game
+            and not _is_mumu_surface_class(cand.child_class)
+            and (not name or name in cand.title.lower())
+        ]
+        if len(crosvm_matches) > 1:
+            self._clear_mumu_ipc()
             logger.warning('Multiple Clash game windows found — pick a distinct window in Settings or close the extra window.')
             return 0
-        else:
-            return matches[0] if matches else 0
+        if len(crosvm_matches) == 1:
+            self._clear_mumu_ipc()
+            return crosvm_matches[0]
+
+        mumu_instances = discover_running_mumu_instances()
+        mumu_win_cands = [cand for cand in candidates if _is_mumu_surface_class(cand.child_class)]
+        if len(mumu_instances) > 1:
+            self._clear_mumu_ipc()
+            logger.warning('Multiple MuMuPlayer instances found — pick the target instance in Settings → Game window.')
+            return 0
+        if len(mumu_instances) == 1:
+            inst = mumu_instances[0]
+            if self._bind_mumu_ipc_instance(inst):
+                real_cands = [c for c in mumu_win_cands if not is_mumu_sentinel_hwnd(c.child_hwnd)]
+                if real_cands:
+                    return real_cands[0].child_hwnd
+                return mumu_sentinel_hwnd(inst.instance_index)
+        if len(mumu_win_cands) > 1:
+            self._clear_mumu_ipc()
+            logger.warning('Multiple MuMuPlayer windows found — pick the target window in Settings → Game window.')
+            return 0
+        if len(mumu_win_cands) == 1:
+            cand = mumu_win_cands[0]
+            self._bind_mumu_for_candidate(cand.child_hwnd, cand.title, cand.child_class)
+            return cand.child_hwnd
+        self._clear_mumu_ipc()
+        return 0
     def get_outer_pixel_size(self):
         """
-Outer window size in pixels (``GetWindowRect``), same basis as :meth:`screenshot`.
+Outer window size in pixels (MuMu IPC display size or ``GetWindowRect``), same basis as :meth:`screenshot`.
 """
         try:
             if not self.hwnd and not self.find_window():
                 return None
+            ipc = getattr(self, 'mumu_ipc', None)
+            if ipc is not None:
+                sz = ipc.get_display_size()
+                if sz is not None:
+                    return sz
+                if is_mumu_sentinel_hwnd(self.hwnd):
+                    return None
             with self.window_dpi_context(self.hwnd):
                 rect = wintypes.RECT()
                 self.user32.GetWindowRect(self.hwnd, ctypes.byref(rect))
@@ -331,6 +500,8 @@ Outer window size in pixels (``GetWindowRect``), same basis as :meth:`screenshot
 
     def is_cloaked(self):
         """True when Windows DWM has cloaked the window (e.g. moved to another Win+Tab Virtual Desktop)."""
+        if getattr(self, 'mumu_ipc', None) is not None:
+            return False
         try:
             dwmapi = ctypes.windll.dwmapi
             DWMWA_CLOAKED = 14
@@ -354,6 +525,8 @@ parent is. Measured live: minimized captures come back pure black while clicks
 still reach the game, which is the worst possible combination — the bot cannot
 see what it is clicking.
 """
+        if getattr(self, 'mumu_ipc', None) is not None:
+            return False
         try:
             hwnd = self.hwnd
             while hwnd:
@@ -374,10 +547,27 @@ see what it is clicking.
 Returns None when the window is minimized or renders nothing: a black frame
 matches no template and reads no text, so acting on one means clicking blind.
 """
-        if self.hwnd and not self.user32.IsWindow(self.hwnd):
+        ipc = getattr(self, 'mumu_ipc', None)
+        if ipc is None and self.hwnd and not self.user32.IsWindow(self.hwnd):
             self.hwnd = 0
         if not self.hwnd and not self.find_window():
             return None
+        ipc = getattr(self, 'mumu_ipc', None)
+        if ipc is not None:
+            frame = ipc.capture_bgr()
+            if frame is not None:
+                WindowService._minimized_logged = False
+                WindowService._cloaked_logged = False
+                fh, fw = frame.shape[:2]
+                dims = ('mumu_ipc', fw, fh)
+                if getattr(WindowService, '_last_capture_dims', None) != dims:
+                    WindowService._last_capture_dims = dims
+                    logger.info('Capture geometry (MuMu IPC): frame=%dx%d', fw, fh)
+                return frame
+            if is_mumu_sentinel_hwnd(self.hwnd) or not self.user32.IsWindow(self.hwnd):
+                self._clear_mumu_ipc()
+                self.hwnd = 0
+                return None
         if self.is_minimized():
             if not WindowService._minimized_logged:
                 WindowService._minimized_logged = True

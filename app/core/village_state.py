@@ -61,8 +61,9 @@ def read_hud_resources_stable(capture, wait, attempts=4):
             if VisionService.find_template(frame, 'build.png', region=VisionService.bottom_half_region(frame))[0] is not None:
                 groups = VisionService._new_hud_numbers(frame, allow_partial=True)
                 current = [None] * 3
+                ui_s = max(0.5, float(getattr(VisionService, '_active_ui_scale', 1.0)))
                 for group in groups:
-                    index = round((group.top / h - 0.0265) / 0.0575)
+                    index = round((group.top / (h * ui_s) - 0.0265) / 0.0575)
                     if 0 <= index < 3:
                             current[index] = VisionService.parse_loot_amount_from_grouped_text(group.text)
             else:

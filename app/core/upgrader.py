@@ -219,7 +219,7 @@ class UpgradeAdvisor:
                 else:
                     self._using_build_menu = True
                     self._menu_scroll_point = layout.scroll_point
-                    self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward=True)
+                    self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward=True, list_scroll=True)
                     return not self.stop_event.wait(0.6)
             else:
                 if self.vision.find_template(frame, 'mbuilder.png', region=VisionService.bottom_half_region(frame))[0] is not None:
@@ -240,7 +240,7 @@ class UpgradeAdvisor:
                                 if self.stop_event.wait(0.5):
                                     return False
                                 else:
-                                    self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward=True)
+                                    self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward=True, list_scroll=True)
                                     return not self.stop_event.wait(1.0)
                         bx, by = find_build_button(frame, self.vision)
                         if bx is not None:
@@ -262,7 +262,7 @@ class UpgradeAdvisor:
                                     if layout is not None:
                                         self._using_build_menu = True
                                         self._menu_scroll_point = layout.scroll_point
-                                        self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward=True)
+                                        self.input.scroll(*self._scroll_point(), _RESET_TO_TOP_WHEEL_CLICKS, upward=True, list_scroll=True)
                                         return not self.stop_event.wait(0.6)
                             logger.info('Upgrade advisor: Buildings & Heroes panel unrecognized; select that Build tab before retrying')
                             self._close_popup()
@@ -332,7 +332,7 @@ class UpgradeAdvisor:
                                             if stale >= _STALE_STEPS_AT_LIST_END:
                                                 break
                                             else:
-                                                self.input.scroll(*self._scroll_point(), _WHEEL_CLICKS)
+                                                self.input.scroll(*self._scroll_point(), _WHEEL_CLICKS, list_scroll=True)
                                                 if self.stop_event.wait(1.0):
                                                     break
                                 self._last_scan_new_ui = self._using_build_menu
@@ -539,7 +539,7 @@ is intermittent — this is what keeps Barbarian King pickable)."""
                                 if scrolls >= _MAX_SCROLL_STEPS:
                                     break
                                 else:
-                                    self.input.scroll(*self._scroll_point(), _WHEEL_CLICKS)
+                                    self.input.scroll(*self._scroll_point(), _WHEEL_CLICKS, list_scroll=True)
                                     if self.stop_event.wait(1.0):
                                         return False
                 if not row_pt:

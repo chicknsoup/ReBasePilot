@@ -1110,7 +1110,7 @@ deselect, which would eat the upcoming Attack click.'''
                 scrolls += 1
                 if scrolls >= _WALL_MENU_SCROLL_STEPS:
                     break
-                self.input.scroll(*self._wall_menu_scroll_point(), _WALL_MENU_WHEEL_CLICKS)
+                self.input.scroll(*self._wall_menu_scroll_point(), _WALL_MENU_WHEEL_CLICKS, list_scroll=True)
                 if self.stop_event.wait(0.5):
                     return
         if not wall_pt:

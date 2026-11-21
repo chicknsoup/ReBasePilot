@@ -88,10 +88,28 @@ try:
         _WALL_TEMPLATE_SCALE_FACTORS = (1.0, 0.90, 0.85)
         _MULTISCALE_CHEST_TEMPLATES = frozenset({'chestcontinue.png', 'chestclaim.png'})
         _CHEST_TEMPLATE_SCALE_FACTORS = (1.0, 1.08, 1.12, 1.16, 0.92)
+        _active_ui_scale: float = 1.0
+        _ui_scale_calibrated_size: Optional[Tuple[int, int]] = None
+        _UI_DPI_SCALE_CANDIDATES = (1.0, 1.22, 1.15, 1.28, 1.35, 0.90, 0.85)
+        _UI_SCALE_ANCHOR_TEMPLATES = frozenset({
+            'attack.png',
+            'build.png',
+            'farmbattle.png',
+            'rankedbattle.png',
+            'attack2.png',
+            'endbattle.png',
+            'surrender.png',
+            'nextbase.png',
+            'returnhome.png',
+            'returnhome2.png',
+        })
         @staticmethod
         def _resize_template_for_screen(template, screen_img):
-            '''Resize reference PNG templates to match the current capture.'''
+            '''Resize reference PNG templates to match the current capture and UI DPI scale.'''
             (sx, sy) = VisionService._template_scale_xy(screen_img)
+            ui_s = VisionService._active_ui_scale
+            sx *= ui_s
+            sy *= ui_s
             if abs(sx - 1) < 0.001 and abs(sy - 1) < 0.001:
                 return template
             (t_h, t_w) = template.shape[:2]
@@ -101,38 +119,68 @@ try:
             return cv2.resize(template, (new_w, new_h), interpolation = interp)
         @staticmethod
         def _best_scaled_template(template, screen_img, search_img, template_name = ''):
-            '''Return the resized template (at the best matching scale factor, including uniform height scale when aspect ratio differs from 16:10 reference).'''
+            '''Return the resized template at the best matching scale factor, adapting automatically to emulator UI DPI (e.g. 240 DPI MuMu vs 320 DPI GPG).'''
             (sx, sy) = VisionService._template_scale_xy(screen_img)
+            (h_scr, w_scr) = screen_img.shape[:2]
             (t_h, t_w) = template.shape[:2]
             (s_h, s_w) = search_img.shape[:2]
+            active = VisionService._active_ui_scale
             if template_name in VisionService._MULTISCALE_WALL_TEMPLATES:
-                factors = VisionService._WALL_TEMPLATE_SCALE_FACTORS
+                primary_factors = tuple(dict.fromkeys([round(active * f, 4) for f in VisionService._WALL_TEMPLATE_SCALE_FACTORS] + list(VisionService._WALL_TEMPLATE_SCALE_FACTORS)))
             elif template_name in VisionService._MULTISCALE_CHEST_TEMPLATES:
-                factors = VisionService._CHEST_TEMPLATE_SCALE_FACTORS
+                primary_factors = tuple(dict.fromkeys([round(active * f, 4) for f in VisionService._CHEST_TEMPLATE_SCALE_FACTORS] + list(VisionService._CHEST_TEMPLATE_SCALE_FACTORS)))
+            elif abs(active - 1.0) > 0.01:
+                primary_factors = (active, 1.0)
             else:
-                factors = (1.0,)
-            scale_pairs = []
-            for factor in factors:
-                scale_pairs.append((sx * factor, sy * factor))
-                if abs(sx - sy) > 0.01:
-                    scale_pairs.append((sy * factor, sy * factor))
-            if len(scale_pairs) == 1:
+                primary_factors = (1.0,)
+
+            need_calibration = VisionService._ui_scale_calibrated_size != (w_scr, h_scr)
+            if not need_calibration and len(primary_factors) == 1 and abs(sx - sy) <= 0.01 and template_name not in VisionService._UI_SCALE_ANCHOR_TEMPLATES:
                 return VisionService._resize_template_for_screen(template, screen_img)
-            best_tpl = None
-            best_score = -2.0
-            for fx, fy in scale_pairs:
-                new_w = max(1, int(round(t_w * fx)))
-                new_h = max(1, int(round(t_h * fy)))
-                if new_w > s_w or new_h > s_h:
-                    continue
-                interp = cv2.INTER_AREA if min(fx, fy) < 1 else cv2.INTER_CUBIC
-                cand = cv2.resize(template, (new_w, new_h), interpolation = interp)
-                (_, val, _, _) = cv2.minMaxLoc(cv2.matchTemplate(search_img, cand, cv2.TM_CCOEFF_NORMED))
-                if float(val) > best_score:
-                    best_score = float(val)
-                    best_tpl = cand
-                    if best_score >= 0.80:
-                        break
+
+            def _eval_factors(factor_seq):
+                best_cand = None
+                best_val = -2.0
+                best_f = active
+                for factor in factor_seq:
+                    scale_pairs = [(sx * factor, sy * factor)]
+                    if abs(sx - sy) > 0.01:
+                        scale_pairs.append((sy * factor, sy * factor))
+                    for fx, fy in scale_pairs:
+                        new_w = max(1, int(round(t_w * fx)))
+                        new_h = max(1, int(round(t_h * fy)))
+                        if new_w > s_w or new_h > s_h:
+                            continue
+                        interp = cv2.INTER_AREA if min(fx, fy) < 1 else cv2.INTER_CUBIC
+                        cand = cv2.resize(template, (new_w, new_h), interpolation = interp)
+                        (_, val, _, _) = cv2.minMaxLoc(cv2.matchTemplate(search_img, cand, cv2.TM_CCOEFF_NORMED))
+                        if float(val) > best_val:
+                            best_val = float(val)
+                            best_cand = cand
+                            best_f = factor
+                            if best_val >= 0.82:
+                                return (best_cand, best_val, best_f)
+                return (best_cand, best_val, best_f)
+
+            (best_tpl, best_score, best_factor) = _eval_factors(primary_factors)
+            if best_score >= 0.78:
+                if need_calibration and best_score >= 0.85 and min(t_h, t_w) >= 20:
+                    VisionService._active_ui_scale = float(best_factor)
+                    VisionService._ui_scale_calibrated_size = (w_scr, h_scr)
+                return best_tpl
+
+            if need_calibration or template_name in VisionService._UI_SCALE_ANCHOR_TEMPLATES:
+                extra = [f for f in VisionService._UI_DPI_SCALE_CANDIDATES if all(abs(f - pf) > 0.01 for pf in primary_factors)]
+                if extra:
+                    (cand_tpl, cand_score, cand_factor) = _eval_factors(extra)
+                    if cand_score > best_score:
+                        (best_tpl, best_score, best_factor) = (cand_tpl, cand_score, cand_factor)
+                    if best_score >= 0.85 and min(t_h, t_w) >= 20:
+                        if abs(VisionService._active_ui_scale - best_factor) > 0.01 or need_calibration:
+                            logger.info('Calibrated UI DPI scale %.2fx for %dx%d frame (via %s, score=%.3f)', best_factor, w_scr, h_scr, template_name or 'template', best_score)
+                        VisionService._active_ui_scale = float(best_factor)
+                        VisionService._ui_scale_calibrated_size = (w_scr, h_scr)
+
             return best_tpl if best_tpl is not None else VisionService._resize_template_for_screen(template, screen_img)
         @staticmethod
         def bottom_half_region(screen_img):
@@ -372,7 +420,9 @@ and value at least ``sat_floor`` / ``val_floor``.
                 (t_h0, t_w0) = template.shape[:2]
                 (s_h, s_w) = search_img.shape[:2]
                 passing = []
-                for factor in VisionService._WALL_TEMPLATE_SCALE_FACTORS:
+                ui_s = VisionService._active_ui_scale
+                wall_factors = tuple(dict.fromkeys([round(ui_s * f, 4) for f in VisionService._WALL_TEMPLATE_SCALE_FACTORS] + list(VisionService._WALL_TEMPLATE_SCALE_FACTORS)))
+                for factor in wall_factors:
                     t_w = max(1, int(round(t_w0 * sx * factor)))
                     t_h = max(1, int(round(t_h0 * sy * factor)))
                     if t_w > s_w or t_h > s_h:
@@ -535,9 +585,10 @@ ROI height — scaled from :data:`_MULTIUPGRADE_COST_REDNESS_ABOVE_AT_BASELINE`
                 key = ASPECT_16_10
             (ref_w, ref_h) = ASPECT_BASELINE[key]
             (base_offset, base_rw, base_rh) = _MULTIUPGRADE_COST_REDNESS_ABOVE_AT_BASELINE.get(key, _MULTIUPGRADE_COST_REDNESS_ABOVE_AT_BASELINE[ASPECT_16_10])
-            center_offset = max(1, int(round(base_offset * sh / float(ref_h))))
-            rw = max(1, int(round(base_rw * sw / float(ref_w))))
-            rh = max(1, int(round(base_rh * sh / float(ref_h))))
+            ui_s = VisionService._active_ui_scale
+            center_offset = max(1, int(round(base_offset * ui_s * sh / float(ref_h))))
+            rw = max(1, int(round(base_rw * ui_s * sw / float(ref_w))))
+            rh = max(1, int(round(base_rh * ui_s * sh / float(ref_h))))
             return (center_offset, rw, rh)
         @staticmethod
         def red_hue_fraction(bgr, *, sat_floor = 40, val_floor = 40):
@@ -777,7 +828,8 @@ Scales by ``(screen_w / ref_w) * (screen_h / ref_h)`` (blob pixel area vs captur
             sw = max(1, int(screen_w))
             sh = max(1, int(screen_h))
             scale = (sw / float(ref_w)) * (sh / float(ref_h))
-            return (max(1, int(round(base_min * scale))), max(1, int(round(base_max * scale))))
+            ui_area = VisionService._active_ui_scale ** 2
+            return (max(1, int(round(base_min * scale * min(1.0, ui_area)))), max(1, int(round(base_max * scale * max(1.0, ui_area)))))
         @staticmethod
         def scaled_top_center_menu_side(screen_w, screen_h, *, aspect_key = None):
             '''
@@ -805,7 +857,8 @@ the aspect baseline by **width** (``1000`` @ 2560 for both 16:10 and 16:9).
             sw = max(1, int(screen_w))
             sh = max(1, int(screen_h))
             scale = (sw / float(ref_w)) * (sh / float(ref_h))
-            return (max(1, int(round(base_min * scale))), max(1, int(round(base_max * scale))))
+            ui_area = VisionService._active_ui_scale ** 2
+            return (max(1, int(round(base_min * scale * min(1.0, ui_area)))), max(1, int(round(base_max * scale * max(1.0, ui_area)))))
         @staticmethod
         def _ocr_query_matches(raw, query_norm, *, case_sensitive, match_alnum_only, fuzzy_min_ratio):
             if not query_norm:
@@ -1321,8 +1374,9 @@ Returns ``(x, y, w, h)`` in screen pixels, anchored to the top-right corner.
                 key = ASPECT_16_10
             (ref_w, ref_h) = ASPECT_BASELINE[key]
             (base_rw, base_rh) = _NUMBERS_HUD_ROI_AT_BASELINE.get(key, _NUMBERS_HUD_ROI_AT_BASELINE[ASPECT_16_10])
-            rw = max(1, int(round(base_rw * sw / float(ref_w))))
-            rh = max(1, int(round(base_rh * sh / float(ref_h))))
+            ui_s = max(1.0, VisionService._active_ui_scale)
+            rw = min(sw, max(1, int(round(base_rw * ui_s * sw / float(ref_w)))))
+            rh = min(sh, max(1, int(round(base_rh * ui_s * sh / float(ref_h)))))
             x = max(0, sw - rw)
             y = 0
             return (x, y, rw, rh)
@@ -1550,13 +1604,14 @@ with one inner list per Y-cluster (characters left-to-right) after clustering, f
             """Read white HUD digits while excluding the colored translucent bars."""
             from app.services.clash_digits import read_price_digits
             height, width = frame.shape[:2]
+            ui_s = VisionService._active_ui_scale
             groups = []
             aliases = str.maketrans({'B': '8', 'S': '5', 'O': '0', 'I': '1', 'l': '1'})
             for index in range(3):
-                left = width - round(height * 0.25)
-                right = width - round(height * 0.0625)
-                top = round(height * (0.0265 + index * 0.0575))
-                roi_height = max(1, round(height * 0.032))
+                left = max(0, width - round(height * 0.25 * ui_s))
+                right = max(left + 1, width - round(height * 0.0625 * ui_s))
+                top = round(height * (0.0265 + index * 0.0575) * ui_s)
+                roi_height = max(1, round(height * 0.032 * ui_s))
                 crop = frame[top:top + roi_height, left:right]
                 if crop.size == 0:
                     if allow_partial:
