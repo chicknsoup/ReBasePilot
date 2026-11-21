@@ -1192,6 +1192,89 @@ deselect, which would eat the upcoming Attack click.'''
                 return ('connection', lx, ly)
         return (None, None, None)
 
+    def _find_cloud_return_home_button(self, frame):
+        """Locate the stacked two-line bottom-left 'Return / Home' villager button on cloud screens."""
+        if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or not frame.size:
+            return (None, None)
+        h, w = frame.shape[:2]
+        bl_roi = (0, int(h * 0.72), max(1, int(w * 0.22)), max(1, h - int(h * 0.72)))
+        return find_ui_label(frame, self.vision, ('Return', 'Home', 'Return Home'), region=bl_roi, min_confidence=45)
+
+    def _detect_unable_to_attack_cloud(self, frame):
+        """Return bottom-left Return Home ``(x, y)`` when the 'Unable to attack Village! Try again later.' cloud error is shown, else ``(None, None)``."""
+        if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or not frame.size:
+            return (None, None)
+        h, w = frame.shape[:2]
+        sky = frame[int(h * 0.12):int(h * 0.38), int(w * 0.20):int(w * 0.80)]
+        if sky.size == 0 or float(sky.mean()) < 225.0:
+            return (None, None)
+        roi = frame[int(h * 0.45):int(h * 0.63), int(w * 0.18):int(w * 0.82)]
+        if roi.size == 0:
+            return (None, None)
+        b = roi[:, :, 0].astype(np.int16)
+        g = roi[:, :, 1].astype(np.int16)
+        r = roi[:, :, 2].astype(np.int16)
+        pink_mask = ((r >= 190) & ((r - g) >= 30) & ((r - b) >= 25)).astype(np.uint8) * 255
+        pink_frac = float(np.count_nonzero(pink_mask)) / float(max(1, pink_mask.size))
+        if pink_frac < 0.012:
+            return (None, None)
+        if type(self.vision) is VisionService:
+            enlarged = cv2.resize(255 - pink_mask, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+            padded = cv2.copyMakeBorder(enlarged, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=255)
+            words = self.vision.find_words_ocr(cv2.cvtColor(padded, cv2.COLOR_GRAY2BGR), preprocess=False, tesseract_config='--psm 6')
+            joined = ' '.join(re.sub(r'[^a-z]', '', (wd.text or '').lower()) for wd in (words or ()))
+            has_banner = (
+                'unable' in joined
+                or ('try' in joined and ('again' in joined or 'later' in joined))
+                or ('attack' in joined and ('again' in joined or 'later' in joined))
+            )
+            if not has_banner:
+                return (None, None)
+        rx, ry = self._find_cloud_return_home_button(frame)
+        if rx is None:
+            rx, ry = int(round(w * 0.064)), int(round(h * 0.89))
+        return (int(rx), int(ry))
+
+    def _handle_unable_to_attack_cloud(self, frame, *, backoff_seconds=8.0):
+        """If 'Unable to attack Village! Try again later.' is on screen, click Return Home and wait briefly."""
+        rx, ry = self._detect_unable_to_attack_cloud(frame)
+        if rx is None:
+            return False
+        logger.warning(
+            'Matchmaking: "Unable to attack Village! Try again later." detected — clicking Return Home (%d, %d) and backing off %.0fs',
+            rx,
+            ry,
+            backoff_seconds,
+        )
+        cb = getattr(self, '_status_callback', None)
+        if cb:
+            cb('Unable to attack village — returning home & retrying shortly')
+        self._cloud_attack_aborted = True
+        self.input._ensure_surface_active(self.window.hwnd, force=True)
+        self.input.click(rx, ry, pause=0.5, rand=False)
+        deadline = time.time() + 12.0
+        reclicked = False
+        while time.time() < deadline:
+            self._check_stop()
+            if self.stop_event.wait(0.6):
+                return True
+            cur = self.window.screenshot()
+            if cur is None or not getattr(cur, 'size', 0):
+                continue
+            self._update_config_size(cur)
+            bot_roi = VisionService.bottom_half_region(cur)
+            ax, _ = self.vision.find_template(cur, 'attack.png', region=bot_roi)
+            if ax or is_village_hud(cur, self.vision):
+                break
+            if not reclicked:
+                rx2, ry2 = self._detect_unable_to_attack_cloud(cur)
+                if rx2 is not None:
+                    reclicked = True
+                    self.input.click(rx2, ry2, pause=0.5, rand=False)
+        if backoff_seconds > 0:
+            self.stop_event.wait(float(backoff_seconds))
+        return True
+
     def _wait_for_village_after_reload(self, timeout=30):
         """Wait for the Supercell loading screen to finish after clicking RELOAD / RELOAD GAME."""
         if self.stop_event.wait(2.0):
@@ -1813,13 +1896,16 @@ deselect, which would eat the upcoming Attack click.'''
                     if rx:
                         logger.info('Confirm Attack modal appeared after attack2.png — clicking Attack! (%d, %d)', rx, ry)
                         self.input.click(rx, ry, pause=0.3)
+        self._cloud_attack_aborted = False
         live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=6, error=False)
         for _ in range(3):
-            if live_x is not None:
+            if live_x is not None or getattr(self, '_cloud_attack_aborted', False):
                 break
             frame_bf = self.window.screenshot()
             if frame_bf is not None and getattr(frame_bf, 'size', 0) > 0:
                 self._update_config_size(frame_bf)
+                if self._handle_unable_to_attack_cloud(frame_bf):
+                    break
                 rkind, rlx, rly = self._find_reload_button(frame_bf)
                 if rlx:
                     logger.warning('Attack launch: reload dialog (%s) detected — clicking RELOAD', rkind)
@@ -1854,8 +1940,12 @@ deselect, which would eat the upcoming Attack click.'''
                             if rx:
                                 self.input.click(rx, ry, pause=0.3)
             live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=10, error=False)
+        if getattr(self, '_cloud_attack_aborted', False):
+            return 'no_attack'
         if live_x is None:
             live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=15)
+        if getattr(self, '_cloud_attack_aborted', False):
+            return 'no_attack'
         if live_x is None:
             frame_timeout = self.window.screenshot()
             _dump_debug_frame(frame_timeout, 'battlefield_timeout')
@@ -1973,6 +2063,8 @@ deselect, which would eat the upcoming Attack click.'''
             if status == 'attack_now':
                 logger.info('Loot filter: scout timer expired while skipping — attacking current base')
                 return True
+            if status == 'cloud_abort':
+                return False
             if status != 'loaded':
                 self._check_stop()
                 logger.warning('Loot filter: the next base did not load after retries — recovering to Home screen instead of deploying blindly')
@@ -2043,7 +2135,10 @@ deselect, which would eat the upcoming Attack click.'''
                 self.input.click(rnx, rny, pause=0.05)
         if not cleared:
             return 'failed'
+        self._cloud_attack_aborted = False
         sx, _sy = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=30, error=False)
+        if getattr(self, '_cloud_attack_aborted', False):
+            return 'cloud_abort'
         if not sx:
             return 'failed'
         if self.stop_event.wait(_NEXT_SETTLE_SECONDS):
@@ -2324,6 +2419,8 @@ deselect, which would eat the upcoming Attack click.'''
                     return
                 else:
                     continue
+            if self._handle_unable_to_attack_cloud(frame, backoff_seconds=0.0):
+                return
             bot_roi = VisionService.bottom_half_region(frame)
             returnhome_tpls = ('returnhome.png', 'returnhome2.png') if self.config.aspect_key == ASPECT_16_10 else ('returnhome.png',)
             rx, ry = (None, None)
@@ -2399,6 +2496,14 @@ deselect, which would eat the upcoming Attack click.'''
                     if self.stop_event.wait(0.5):
                         return
                     else:
+                        continue
+                if step >= 3 and isinstance(frame, np.ndarray) and frame.ndim == 3 and frame.size and float(frame.mean()) >= 220.0:
+                    crx, cry = self._find_cloud_return_home_button(frame)
+                    if crx is not None:
+                        logger.info('Recovery: clicking cloud Return Home at (%d, %d)', int(crx), int(cry))
+                        self.input.click(crx, cry, pause=0.4, rand=False)
+                        if self.stop_event.wait(0.6):
+                            return
                         continue
             self.input.click(*self.config.get_point('empty'), pause=0.2)
             if not self.stop_event.wait(0.6):
@@ -2821,6 +2926,8 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
             self._update_config_size(frame)
             if self._battle_rewards.handle(frame):
                 continue
+            if ('endbattle.png' in templates or 'surrender.png' in templates) and self._handle_unable_to_attack_cloud(frame):
+                return (None, None)
             rkind, rlx, rly = self._find_reload_button(frame)
             if rlx:
                 reload_warned += 1

@@ -99,29 +99,33 @@ class AttackStrategy:
 
         xm0 = max(0, cx - max(3, int(round(fw * 0.0085 * ui_s))))
         xm1 = max(xm0 + 2, cx - max(1, int(round(fw * 0.0015 * ui_s))))
-        ys0 = max(0, cy - int(round(fh * 0.075 * ui_s)))
-        ys1 = max(ys0 + 4, int(top + th * 0.25))
-        if xm1 > fw or ys1 > fh:
+        ys0 = max(0, cy - int(round(fh * 0.078 * ui_s)))
+        ys1 = min(fh, max(ys0 + 4, int(top)))
+        if xm1 > fw or ys1 <= ys0:
             return False
         mid_strip = frame[ys0:ys1, xm0:xm1].astype(np.float32)
         b_mean = mid_strip[:, :, 0].mean(axis=1)
-        min_gr = np.minimum(mid_strip[:, :, 1].mean(axis=1), mid_strip[:, :, 2].mean(axis=1))
+        g_mean = mid_strip[:, :, 1].mean(axis=1)
+        min_gr = np.minimum(g_mean, mid_strip[:, :, 2].mean(axis=1))
         row_flat = mid_strip.std(axis=1).mean(axis=1)
-        hdr_mask = (b_mean >= 135.0) & ((b_mean - min_gr) >= 40.0) & (row_flat <= 14.0)
+        hdr_mask = (b_mean >= 135.0) & ((b_mean - g_mean) >= 25.0) & ((b_mean - min_gr) >= 40.0) & (row_flat <= 18.0)
         min_run = max(3, int(round(fh * 0.005 * ui_s)))
-        hy0 = None
-        run = 0
+        runs = []
+        run_start = None
         for r_idx, ok in enumerate(hdr_mask):
-            if ok:
-                run += 1
-                if run == min_run:
-                    hy0 = ys0 + r_idx - min_run + max(1, int(round(fh * 0.003 * ui_s)))
-                    break
-            else:
-                run = 0
-        if hy0 is None:
+            if ok and run_start is None:
+                run_start = r_idx
+            elif not ok and run_start is not None:
+                if r_idx - run_start >= min_run:
+                    runs.append((run_start, r_idx))
+                run_start = None
+        if run_start is not None and len(hdr_mask) - run_start >= min_run:
+            runs.append((run_start, len(hdr_mask)))
+        if not runs:
             return False
-        hy1 = min(fh, hy0 + max(4, int(round(fh * 0.014 * ui_s))))
+        r0, r1 = runs[-1]
+        hy0 = ys0 + r0 + max(1, int(round(fh * 0.002 * ui_s)))
+        hy1 = min(ys0 + r1, hy0 + max(4, int(round(fh * 0.014 * ui_s))))
 
         bx0 = max(0, cx - max(8, int(round(fw * 0.022 * ui_s))))
         bx1 = max(bx0 + 2, cx - max(4, int(round(fw * 0.011 * ui_s))))

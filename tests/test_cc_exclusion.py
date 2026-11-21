@@ -70,6 +70,22 @@ class ClanCastleExclusionTests(unittest.TestCase):
         expected_own_center = (own_box[0] + own_box[2] // 2, own_box[1] + own_box[3] // 2)
         self.assertEqual(strat._find_non_cc_template(frame, 'ragespell.png'), expected_own_center)
 
+    def test_glowing_water_scenery_above_card_does_not_misclassify_own_troop_as_cc(self):
+        w, h = 1600, 900
+        frame, own_box, cc_box = _synthetic_battle_frame(w, h, badge_colors=((190, 175, 70), (130, 50, 175)))
+        hdr_y0 = int(round(h * 0.855))
+        own_cx = own_box[0] + own_box[2] // 2
+        # Paint glowing cyan/blue river + dark riverbank directly above the own card's black border
+        frame[hdr_y0 - 20:hdr_y0 - 2, own_cx - 25:own_cx + 15] = (225, 228, 18)   # glowing cyan water
+        frame[hdr_y0 - 20:hdr_y0 - 2, own_cx - 50:own_cx - 25] = (95, 102, 14)    # dark stone bank
+        frame[hdr_y0 - 2:hdr_y0, own_cx - 50:own_cx + 30] = (15, 10, 0)           # card top outline
+        # Also paint blue river above card to ensure bottom-most header run wins over scenery
+        frame[hdr_y0 - 16:hdr_y0 - 8, own_cx - 25:own_cx + 15] = (230, 150, 80)
+
+        strat = AttackStrategy(Mock(), VisionService(), Mock())
+        self.assertFalse(strat._is_clan_castle_card(frame, *own_box))
+        self.assertTrue(strat._is_clan_castle_card(frame, *cc_box))
+
     def test_deploy_coordinates_never_enter_bottom_deploy_bar(self):
         fw, fh = 1224, 689
         safe_max_y = int(round(fh * _DEPLOY_BAR_SAFE_Y_FRAC))
