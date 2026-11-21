@@ -2,6 +2,7 @@ import math
 import time
 import random
 import cv2
+import numpy as np
 from typing import Any, List, Optional, Tuple
 from app.services.input import InputService
 from app.services.vision import VisionService
@@ -15,6 +16,8 @@ _EDRAG_COUNT = 12
 _EDRAG_DELAY = 0.2
 _EDRAG_CORNER_MARGIN = 100
 _DIAMOND_EDGES = (('left', 'top'), ('top', 'right'))
+_DEPLOY_BAR_SAFE_Y_FRAC = 0.80
+_CC_HEADER_BADGE_DEV_FLOOR = 15.0
 
 class AttackStrategy:
     '''Base class for attack strategies.'''
@@ -73,18 +76,54 @@ class AttackStrategy:
         return frame, handled
 
     def _is_clan_castle_card(self, frame, left, top, tw, th):
-        """True when the card containing ``(left, top, tw, th)`` has the Clan Castle shield badge in its top-left corner."""
+        """True when the card containing ``(left, top, tw, th)`` has a Clan Castle badge in its top-left header.
+
+        Clash of Clans renders the player's own custom Clan Badge (not a fixed icon) in the
+        top-left header of Clan Castle cards, while regular troop/spell headers are a flat
+        blue/purple gradient across their left half. Comparing the left badge zone against
+        the card's own blank middle-left header strip detects any clan emblem regardless of
+        colors, resolution, or background scenery.
+        """
         if frame is None or not getattr(frame, 'size', 0):
             return False
         fh, fw = frame.shape[:2]
-        rx = max(0, int(left - tw * 0.45))
-        ry = max(0, int(top - th * 1.15))
-        rw = min(fw - rx, max(1, int(tw * 0.9)))
-        rh = min(fh - ry, max(1, int(th * 1.05)))
-        if rw <= 4 or rh <= 4:
+        cx = int(left + tw // 2)
+        cy = int(top + th // 2)
+
+        xm0 = max(0, cx - max(3, int(round(fw * 0.0085))))
+        xm1 = max(xm0 + 2, cx - max(1, int(round(fw * 0.0015))))
+        ys0 = max(0, cy - int(round(fh * 0.075)))
+        ys1 = max(ys0 + 4, int(top + th * 0.25))
+        if xm1 > fw or ys1 > fh:
             return False
-        bx, _ = self.vision.find_template(frame, 'cc_badge.png', threshold=0.82, region=(rx, ry, rw, rh))
-        return bx is not None
+        mid_strip = frame[ys0:ys1, xm0:xm1].astype(np.float32)
+        b_mean = mid_strip[:, :, 0].mean(axis=1)
+        min_gr = np.minimum(mid_strip[:, :, 1].mean(axis=1), mid_strip[:, :, 2].mean(axis=1))
+        row_flat = mid_strip.std(axis=1).mean(axis=1)
+        hdr_mask = (b_mean >= 135.0) & ((b_mean - min_gr) >= 40.0) & (row_flat <= 14.0)
+        min_run = max(3, int(round(fh * 0.005)))
+        hy0 = None
+        run = 0
+        for r_idx, ok in enumerate(hdr_mask):
+            if ok:
+                run += 1
+                if run == min_run:
+                    hy0 = ys0 + r_idx - min_run + max(1, int(round(fh * 0.003)))
+                    break
+            else:
+                run = 0
+        if hy0 is None:
+            return False
+        hy1 = min(fh, hy0 + max(4, int(round(fh * 0.014))))
+
+        bx0 = max(0, cx - max(8, int(round(fw * 0.022))))
+        bx1 = max(bx0 + 2, cx - max(4, int(round(fw * 0.011))))
+        if bx1 > fw or hy1 <= hy0:
+            return False
+        ref_bgr = np.median(frame[hy0:hy1, xm0:xm1].astype(np.float32), axis=(0, 1))
+        badge_patch = frame[hy0:hy1, bx0:bx1].astype(np.float32)
+        dev = float(np.mean(np.abs(badge_patch - ref_bgr)))
+        return dev >= _CC_HEADER_BADGE_DEV_FLOOR
 
     def _find_non_cc_template(self, frame, template_name, *, threshold=0.75, region=None):
         """Find the leftmost match of ``template_name`` that is NOT a Clan Castle troop/spell card."""
@@ -187,11 +226,12 @@ class AttackStrategy:
     
     @staticmethod
     def _quantize_deploy_to_frame(px, py, fw, fh):
-        '''Clamp to ``[0, fw-1]`` x ``[0, fh-1]``, round to nearest pixels.'''
+        '''Clamp to ``[0, fw-1]`` x ``[0, safe_max_y]`` above the bottom deploy bar.'''
         if fw <= 0 or fh <= 0:
             return (int(round(px)), int(round(py)))
+        max_y = max(0, min(fh - 1, int(round(fh * _DEPLOY_BAR_SAFE_Y_FRAC))))
         cx = max(0, min(float(fw - 1), float(px)))
-        cy = max(0, min(float(fh - 1), float(py)))
+        cy = max(0, min(float(max_y), float(py)))
         return (int(round(cx)), int(round(cy)))
 
     
@@ -556,8 +596,7 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
                 fresh, handled = self._reward_checkpoint(selected='earthquake.png')
                 if handled and fresh is None:
                     break
-                jx = max(0, min(fw - 1, cx))
-                jy = max(0, min(fh - 1, cy))
+                jx, jy = self._quantize_deploy_to_frame(cx, cy, fw, fh)
                 self.input.click_at(jx, jy, rand = False)
                 delay = random.uniform(0.1, 0.3)
                 if self.stop_event:
@@ -589,8 +628,12 @@ slot nearest the top vertex is left empty (virtual troop at the apex).
                 fresh, handled = self._reward_checkpoint(selected=spell_tpl)
                 if handled and fresh is None:
                     break
-                jx = max(0, min(fw - 1, cx + random.randint(-jitter_px, jitter_px)))
-                jy = max(0, min(fh - 1, cy + random.randint(-jitter_px, jitter_px)))
+                jx, jy = self._quantize_deploy_to_frame(
+                    cx + random.randint(-jitter_px, jitter_px),
+                    cy + random.randint(-jitter_px, jitter_px),
+                    fw,
+                    fh,
+                )
                 self.input.click_at(jx, jy, rand = False)
                 delay = random.uniform(0.12, 0.25)
                 if self.stop_event:
@@ -616,8 +659,9 @@ class TroopSpamStrategy(AttackStrategy):
         frame, _ = self._reward_checkpoint(frame)
         self._sync_frame_size(frame)
         logger.info(f'''Executing {self.troop_name} strategy''')
+        (fh, fw) = frame.shape[:2]
         roi = self.vision.bottom_half_region(frame)
-        (tx, ty) = self.vision.find_template(frame, f'''{self.troop_name}.png''', region = roi)
+        (tx, ty) = self._find_non_cc_template(frame, f'''{self.troop_name}.png''', threshold = 0.75, region = roi)
         if tx is None:
             msg = f'''Troop {self.troop_name} not found!'''
             logger.warning(msg)
@@ -649,7 +693,7 @@ class TroopSpamStrategy(AttackStrategy):
             idx = (start_idx + i * direction) % 4
             ordered_corners.append(corners[idx])
         start_corner = ordered_corners[0]
-        (curr_x, curr_y) = self._expand_loc(*self._point(start_corner))
+        (curr_x, curr_y) = self._quantize_deploy_to_frame(*self._expand_loc(*self._point(start_corner)), fw, fh)
         self.input.mouse_down(curr_x, curr_y)
         if ev and ev.wait(0.65):
             self.input.mouse_up(curr_x, curr_y)
@@ -665,9 +709,10 @@ class TroopSpamStrategy(AttackStrategy):
                 if handled:
                     if fresh is None:
                         break
+                    (fh, fw) = fresh.shape[:2]
                     self.input.mouse_down(curr_x, curr_y)
                 next_c = ordered_corners[i + 1]
-                (target_x, target_y) = self._expand_loc(*self._point(next_c))
+                (target_x, target_y) = self._quantize_deploy_to_frame(*self._expand_loc(*self._point(next_c)), fw, fh)
                 duration = random.uniform(segment_duration * 0.9, segment_duration * 1.1)
                 self.input.human_move(curr_x, curr_y, target_x, target_y, duration = duration)
                 curr_y = target_y
