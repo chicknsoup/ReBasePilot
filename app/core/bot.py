@@ -14,7 +14,15 @@ import numpy as np
 from typing import Callable, List, Optional, Tuple
 from app.config import ASPECT_16_10, ASPECT_16_9, Config
 from app.core.clan import ClanAssistant, ClanOptions, missing_templates
-from app.core.loot_filter import TEMPLATE_NEXT_BASE, LootFilter, combine_reads, meets, read_enemy_loot
+from app.core.loot_filter import (
+    TEMPLATE_NEXT_BASE,
+    LootFilter,
+    combine_reads,
+    meets,
+    read_battle_remaining_loot,
+    read_enemy_loot,
+    read_enemy_loot_ocr,
+)
 from app.core.loot_tracker import LootLedger, UNKNOWN, corroborate_results, read_raid_result, read_raid_bonus
 from app.core.strategies import AttackStrategy, EdragStrategy, TroopSpamStrategy, _EDRAG_DELAY
 from app.core.upgrader import AUTO_UPGRADE_MODES, LIVE_UPGRADE_MODES, MODE_OFF, UpgradeAdvisor
@@ -64,9 +72,12 @@ _NEXT_CLEAR_POLLS = 10
 _NEXT_CLEAR_POLL_INTERVAL = 0.3
 _NEXT_CLICK_ATTEMPTS = 3
 _NEXT_BASE_DIFF_FLOOR = 18.0
-_NEXT_SETTLE_SECONDS = 1.0
+_NEXT_SETTLE_SECONDS = 0.45
 _LOOT_READ_POLLS = 6
 _LOOT_READ_SAMPLES = 3
+_BATTLE_WAIT_MAX_SECONDS = 135
+_BATTLE_NO_LOOT_GAIN_SECONDS = 15.0
+_BATTLE_ARMY_DEAD_STALL_SECONDS = 6.0
 _WALL_POPUP_SETTLE_POLLS = 6
 _WALL_REMOVE_ATTEMPTS = 2
 _WALL_ADD_ATTEMPTS = 3
@@ -272,11 +283,17 @@ class Bot:
                 self._emit_loot_update()
             if interrupted:
                 raise InterruptedError('Bot stopped by user')
-    def _refresh_home_resources(self):
+    def _refresh_home_resources(self, max_age_s=0.0):
         """Refresh spendable inventory and cap detection; never add raid earnings."""
+        if max_age_s > 0.0:
+            cached = getattr(self, '_last_hud_triplet', None)
+            cached_ts = getattr(self, '_last_hud_triplet_ts', 0.0)
+            if cached is not None and (time.monotonic() - cached_ts) <= max_age_s:
+                return
         triplet = self._read_hud_triplet_stable()
         if triplet is None:
             self._last_hud_triplet = None
+            self._last_hud_triplet_ts = 0.0
             self._gold_pinned = self._elixir_pinned = False
             self._emit_state(storages='unreadable')
             return
@@ -285,6 +302,7 @@ class Bot:
             self._gold_pinned = previous is not None and triplet[0] == previous[0]
             self._elixir_pinned = previous is not None and triplet[1] == previous[1]
             self._inventory_prev = self._last_hud_triplet = triplet
+            self._last_hud_triplet_ts = time.monotonic()
             ledger = getattr(self, '_loot_ledger', None)
             if ledger is not None:
                 ledger.record_inventory(triplet, account=getattr(self, '_loot_account', None))
@@ -527,6 +545,7 @@ past the bottom is a harmless no-op, so this can be called repeatedly.
                     gold, elixir, _dark = triplet
                     self._last_wall_hud = (gold, elixir)
                     self._last_hud_triplet = triplet
+                    self._last_hud_triplet_ts = time.monotonic()
                     if gold >= threshold or elixir >= threshold:
                         logger.info('Wall upgrades: loot gold=%s elixir=%s reached threshold %s', gold, elixir, threshold)
                         return True
@@ -1459,8 +1478,19 @@ deselect, which would eat the upcoming Attack click.'''
             self._maybe_upgrade_walls(upgrade_walls)
             self._maybe_auto_upgrade()
             self._maybe_idle(deadline)
-            self.input.scroll(*self._scroll_point(), 5)
-            if self.stop_event.wait(random.uniform(0.15, 0.25)):
+            frame_ready = self.window.screenshot()
+            attack_ready = False
+            if frame_ready is not None and getattr(frame_ready, 'size', 0) > 0:
+                self._update_config_size(frame_ready)
+                ax_r, _ = self.vision.find_template(
+                    frame_ready,
+                    'attack.png',
+                    region=VisionService.bottom_half_region(frame_ready),
+                )
+                attack_ready = ax_r is not None
+            if not attack_ready:
+                self.input.scroll(*self._scroll_point(), 5)
+            if self.stop_event.wait(random.uniform(0.10, 0.18)):
                 return None
             if star_bonus and self._is_star_bonus_claimed():
                 logger.info('Star bonus claimed (star icons no longer visible). Stopping.')
@@ -1815,7 +1845,7 @@ deselect, which would eat the upcoming Attack click.'''
             ax, ay = self._wait_for_attack_with_nudge()
             if not ax:
                 return 'no_attack'
-            self._refresh_home_resources()
+            self._refresh_home_resources(max_age_s=15.0)
             self.input.click(ax, ay, pause=0.6)
             fx, fy = self._wait_for_battle_mode_button(battle_template, ranked_fill=ranked_fill, timeout=12)
             for _ in range(3):
@@ -2040,10 +2070,25 @@ deselect, which would eat the upcoming Attack click.'''
             if meets(loot, lf):
                 logger.info('Loot filter: base holds %s gold / %s elixir / %s dark — attacking', gold, elixir, dark)
                 return True
-            confirm = self._read_base_loot(polls=2)
-            if confirm is None or meets(confirm, lf):
-                logger.info('Loot filter: second read of this base disagreed (%s vs %s) — attacking it', loot, confirm)
-                return True
+            if not getattr(self, '_last_loot_read_agreed', False):
+                confirm = self._read_base_loot(polls=2)
+                if confirm is None or meets(confirm, lf):
+                    logger.info('Loot filter: second read of this base disagreed (%s vs %s) — attacking it', loot, confirm)
+                    return True
+            # Guard against a truncated digit (e.g. 5678 / 1,847,500): when one resource
+            # is high (>= 500k) and the other looks suspiciously low (< 200k), verify with
+            # Tesseract OCR before skipping.
+            if (gold >= 500000 and elixir < 200000) or (elixir >= 500000 and gold < 200000):
+                ocr_frame = self.window.screenshot()
+                if ocr_frame is not None and getattr(ocr_frame, 'size', 0):
+                    ocr_loot = read_enemy_loot_ocr(ocr_frame)
+                    if ocr_loot is not None and meets(ocr_loot, lf):
+                        logger.info(
+                            'Loot filter: OCR confirmation rescued base (%s vs %s) — attacking it',
+                            ocr_loot,
+                            loot,
+                        )
+                        return True
             frame = self.window.screenshot()
             if frame is None:
                 return True
@@ -2146,7 +2191,13 @@ deselect, which would eat the upcoming Attack click.'''
             return 'failed'
         return 'loaded'
     def _read_base_loot(self, polls=_LOOT_READ_POLLS, samples=_LOOT_READ_SAMPLES):
-        """OCR the enemy loot panel and fold several reads into one.\n\nRetries while the panel has not rendered yet, then keeps reading until it has\n``samples`` successful reads to combine — a single read of this panel is wrong\nabout half the time on a live client (dropped digit: 705,559 read as 70,559),\nand one low read is the difference between skipping a good base and raiding it.\nReturns the combined triplet, or None once the polls are spent.\n"""
+        """Read the enemy loot panel and fold several reads into one.
+
+        Stops early as soon as two consecutive reads agree identically (typical
+        with the fast glyph reader), and otherwise gathers up to ``samples``
+        reads before taking the per-resource max.
+        """
+        self._last_loot_read_agreed = False
         reads = []
         for _ in range(max(1, int(polls))):
             frame = self.window.screenshot()
@@ -2155,9 +2206,12 @@ deselect, which would eat the upcoming Attack click.'''
                 loot = read_enemy_loot(frame)
                 if loot is not None:
                     reads.append(loot)
+                    if len(reads) >= 2 and reads[-1] == reads[-2]:
+                        self._last_loot_read_agreed = True
+                        break
                     if len(reads) >= max(1, int(samples)):
                         break
-            if self.stop_event.wait(0.35):
+            if self.stop_event.wait(0.15):
                 break
         return combine_reads(reads)
     def _get_strategy(self, method_id):
@@ -2172,6 +2226,77 @@ deselect, which would eat the upcoming Attack click.'''
         if method_id == 4:
             return EdragStrategy(self.input, self.vision, self.config, self.stop_event, status_callback = cb, earthquake_method = eq)
         return TroopSpamStrategy(self.input, self.vision, self.config, self.stop_event, 'sneaky', 15, status_callback = cb, earthquake_method = eq)
+    @staticmethod
+    def _find_battle_speed_button(frame):
+        """Detect the green ``1x`` fast-forward button on the right above Overall Damage.
+
+        Returns ``(cx, cy)`` in frame coordinates when the button is visible, else ``(None, None)``.
+        """
+        if frame is None or not getattr(frame, 'size', 0):
+            return (None, None)
+        fh, fw = frame.shape[:2]
+        x0, y0 = int(fw * 0.88), int(fh * 0.45)
+        x1, y1 = fw, int(fh * 0.68)
+        roi = frame[y0:y1, x0:x1]
+        if roi.size == 0:
+            return (None, None)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        green = cv2.inRange(hsv, (35, 110, 140), (75, 255, 255))
+        _n, _labels, stats, _centroids = cv2.connectedComponentsWithStats(green)
+        min_w = max(24, int(round(fw * 0.038)))
+        max_w = max(min_w + 10, int(round(fw * 0.11)))
+        best = None
+        for s in stats[1:]:
+            bx, by, bw, bh, area = int(s[0]), int(s[1]), int(s[2]), int(s[3]), int(s[4])
+            if not (min_w <= bw <= max_w and min_w <= bh <= max_w):
+                continue
+            aspect = bw / float(max(1, bh))
+            if not (0.72 <= aspect <= 1.38):
+                continue
+            fill = area / float(max(1, bw * bh))
+            if fill < 0.60:
+                continue
+            sub_hsv = hsv[by:by + bh, bx:bx + bw]
+            white_ratio = float((cv2.inRange(sub_hsv, (0, 0, 215), (180, 65, 255)) > 0).mean())
+            if not (0.025 <= white_ratio <= 0.26):
+                continue
+            if best is None or area > best[0]:
+                best = (area, x0 + bx + bw // 2, y0 + by + bh // 2)
+        return (best[1], best[2]) if best is not None else (None, None)
+
+    @staticmethod
+    def _battle_damage_crop(frame):
+        """Small grayscale thumbnail of the bottom-right Overall Damage % HUD."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return None
+        fh, fw = frame.shape[:2]
+        roi = frame[int(fh * 0.68):int(fh * 0.79), int(fw * 0.82):int(fw * 0.99)]
+        if roi.size == 0:
+            return None
+        return cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+
+    @staticmethod
+    def _battle_has_alive_hero_hp_bar(frame):
+        """True when a green HP bar strip is visible above any hero card in the bottom deploy bar."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return False
+        fh, fw = frame.shape[:2]
+        strip = frame[int(fh * 0.78):int(fh * 0.84), int(fw * 0.30):int(fw * 0.82)]
+        if strip.size == 0:
+            return False
+        hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
+        green = cv2.inRange(hsv, (40, 130, 140), (80, 255, 255))
+        return int((green > 0).sum()) >= max(30, int(round(fw * 0.025)))
+
+    def _end_battle_now(self):
+        """Click End Battle / Surrender and confirm Okay if prompted."""
+        (bx, by) = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=5, error=False)
+        if bx:
+            self.input.click(bx, by, pause=0.35, rand=False)
+            ox, oy = self._find_template_once('okay.png')
+            if ox:
+                self.input.click(ox, oy, pause=0.3, rand=False)
+
     def _wait_for_battle_end(self, is_sneaky):
         if is_sneaky:
             if self.stop_event.wait(3):
@@ -2185,13 +2310,19 @@ deselect, which would eat the upcoming Attack click.'''
                 self.input.click(bx, by, pause = 0.1)
                 return None
             return None
-        # Non-sneaky (e.g. E-Drags): let the attack run up to 75s or until the
-        # Victory/Defeat screen (returnhome.png / chestclaim.png) appears naturally.
-        # Do NOT click endbattle.png immediately after deployment, because once all
-        # troops/spells/abilities are spent, the bottom-left button changes from
-        # Surrender to End Battle while E-Drags are still attacking.
-        start = time.time()
-        while time.time() - start < 75:
+        # Smart battle wait (non-sneaky, e.g. E-Drags):
+        # 1. End immediately when army+heroes are dead (damage & loot stalled) or Gold/Elixir is 0/0.
+        # 2. End if no loot is gained for 15s continuously.
+        # 3. Otherwise, click the 1x speed button ONCE to enable 4x (never toggle back to 1x).
+        start = time.monotonic()
+        last_loot_gain_ts = start
+        last_damage_change_ts = start
+        best_loot = None
+        zero_loot_streak = 0
+        prev_damage_crop = None
+        fast_forward_clicked = False
+
+        while time.monotonic() - start < _BATTLE_WAIT_MAX_SECONDS:
             self._check_stop()
             frame = self.window.screenshot()
             if frame is not None and not isinstance(frame, np.ndarray):
@@ -2219,17 +2350,76 @@ deselect, which would eat the upcoming Attack click.'''
                     if rx:
                         return None
                 cx, _ = self.vision.find_template(frame, 'chestclaim.png', region = bot_roi)
-                if cx:
+                if cx or self._is_chest_tap_screen(frame):
                     return None
+
+                now = time.monotonic()
+                cur_loot = read_battle_remaining_loot(frame)
+                if cur_loot is not None:
+                    if best_loot is None:
+                        best_loot = cur_loot
+                        last_loot_gain_ts = now
+                    elif cur_loot[0] < best_loot[0] or cur_loot[1] < best_loot[1] or cur_loot[2] < best_loot[2]:
+                        best_loot = (
+                            min(best_loot[0], cur_loot[0]),
+                            min(best_loot[1], cur_loot[1]),
+                            min(best_loot[2], cur_loot[2]),
+                        )
+                        last_loot_gain_ts = now
+                    if cur_loot[0] == 0 and cur_loot[1] == 0:
+                        zero_loot_streak += 1
+                    else:
+                        zero_loot_streak = 0
+
+                dmg_crop = self._battle_damage_crop(frame)
+                if dmg_crop is not None:
+                    if prev_damage_crop is None or prev_damage_crop.shape != dmg_crop.shape:
+                        prev_damage_crop = dmg_crop
+                        last_damage_change_ts = now
+                    else:
+                        if float(np.mean(cv2.absdiff(prev_damage_crop, dmg_crop))) >= 3.5:
+                            prev_damage_crop = dmg_crop
+                            last_damage_change_ts = now
+
+                # Priority 1: All Gold+Elixir looted OR army & heroes all dead (no damage/loot activity)
+                if zero_loot_streak >= 2:
+                    logger.info('Battle wait: Available Loot is 0/0 (all Gold & Elixir looted) — ending battle early')
+                    self._end_battle_now()
+                    return None
+                if (
+                    now - start >= _BATTLE_ARMY_DEAD_STALL_SECONDS
+                    and now - last_damage_change_ts >= _BATTLE_ARMY_DEAD_STALL_SECONDS
+                    and now - last_loot_gain_ts >= _BATTLE_ARMY_DEAD_STALL_SECONDS
+                    and not self._battle_has_alive_hero_hp_bar(frame)
+                ):
+                    logger.info('Battle wait: heroes & troops appear defeated (no damage/loot for %.0fs) — ending battle early', _BATTLE_ARMY_DEAD_STALL_SECONDS)
+                    self._end_battle_now()
+                    return None
+
+                # Priority 2: No loot gained for 15s continuously -> end battle
+                if best_loot is not None and (now - last_loot_gain_ts) >= _BATTLE_NO_LOOT_GAIN_SECONDS:
+                    logger.info(
+                        'Battle wait: no loot gained for %.0fs (remaining %d/%d/%d) — ending battle early',
+                        _BATTLE_NO_LOOT_GAIN_SECONDS,
+                        best_loot[0],
+                        best_loot[1],
+                        best_loot[2],
+                    )
+                    self._end_battle_now()
+                    return None
+
+                # Priority 3 (last): Enable 4x fast-forward once when the 1x button appears
+                if not fast_forward_clicked:
+                    sx, sy = self._find_battle_speed_button(frame)
+                    if sx is not None:
+                        logger.info('Battle wait: 1x speed button detected at (%d, %d) — clicking once for 4x', sx, sy)
+                        self.input.click(sx, sy, pause=0.15, rand=False)
+                        fast_forward_clicked = True
+
             if self.stop_event.wait(1.0):
                 self._check_stop()
                 return None
-        (bx, by) = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout = 5, error = False)
-        if bx:
-            self.input.click(bx, by, pause = 0.35, rand = False)
-            ox, oy = self._find_template_once('okay.png')
-            if ox:
-                self.input.click(ox, oy, pause = 0.3, rand = False)
+        self._end_battle_now()
         return None
     def _return_home(self):
         '''Dismiss Okay if present, then wait for ``returnhome.png`` (+ ``returnhome2.png`` on 16:10) or ``chestclaim.png`` (mutually exclusive).'''
@@ -2243,6 +2433,10 @@ deselect, which would eat the upcoming Attack click.'''
             if self.stop_event.wait(0.35):
                 self._check_stop()
                 return True
+            self._tap_empty_until_chest_continue()
+            return True
+        if kind == 'chest_tap':
+            logger.info('Post-battle UI: chest Tap! screen visible; running chest open flow')
             self._tap_empty_until_chest_continue()
             return True
         return False
@@ -2289,6 +2483,8 @@ deselect, which would eat the upcoming Attack click.'''
             if cx:
                 self._record_raid_result(frame)
                 return ('chest', cx, cy)
+            if self._is_chest_tap_screen(frame):
+                return ('chest_tap', 0, 0)
             ax, _ = self.vision.find_template(frame, 'attack.png', region=bot_roi)
             if ax:
                 self._finish_unread_raid('home reached directly after ending battle')
@@ -2313,12 +2509,62 @@ deselect, which would eat the upcoming Attack click.'''
         (w, h) = (self.config.width, self.config.height)  # [recovered: pycdc reversed STORE_FAST_STORE_FAST pairs]
         if w <= 1 or h <= 1:
             (w, h) = (self.config.ref_width, self.config.ref_height)
-        cx = int(w * 0.75)
-        cy = h // 2
-        j = 85
+        cx = int(w * 0.50)
+        cy = int(h * 0.48)
+        j = 40
         return (max(0, min(w - 1, cx + random.randint(-j, j))), max(0, min(h - 1, cy + random.randint(-j, j))))
+
+    def _is_chest_tap_screen(self, frame):
+        """True when the Treasure/Event Chest 'Tap!' opening screen is visible."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return False
+        if not get_template_path('chest_tap.png').exists():
+            return False
+        fh, fw = frame.shape[:2]
+        top_center = (int(fw * 0.36), int(fh * 0.09), max(1, int(fw * 0.28)), max(1, int(fh * 0.24)))
+        tx, _ty = self.vision.find_template(frame, 'chest_tap.png', threshold=0.72, region=top_center)
+        if tx is not None:
+            return True
+        tx, _ty = self._match_ui_control(frame, 'chest_tap.png', region=top_center)
+        return tx is not None
+
+    def _find_chest_continue_button(self, frame):
+        """Locate the green 'Continue' button on a chest reward screen."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return (None, None)
+        bot_roi = VisionService.bottom_half_region(frame)
+        tx, ty = self.vision.find_template(frame, 'chestcontinue.png', region=bot_roi)
+        if tx:
+            return (tx, ty)
+        tx, ty = self._match_ui_control(frame, 'chestcontinue.png', region=bot_roi)
+        if tx:
+            return (tx, ty)
+        # Visual fallback: bright green rounded 'Continue' pill at bottom-center
+        fh, fw = frame.shape[:2]
+        x0, y0 = int(fw * 0.35), int(fh * 0.76)
+        x1, y1 = int(fw * 0.65), int(fh * 0.95)
+        roi = frame[y0:y1, x0:x1]
+        if roi.size == 0:
+            return (None, None)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        green = cv2.inRange(hsv, (35, 110, 140), (75, 255, 255))
+        _n, _lbl, stats, _cen = cv2.connectedComponentsWithStats(green)
+        for s in sorted(stats[1:], key=lambda r: int(r[4]), reverse=True):
+            bx, by, bw, bh, area = int(s[0]), int(s[1]), int(s[2]), int(s[3]), int(s[4])
+            if bw < int(fw * 0.10) or bh < int(fh * 0.05):
+                continue
+            aspect = bw / float(max(1, bh))
+            fill = area / float(max(1, bw * bh))
+            if not (2.0 <= aspect <= 4.5 and fill >= 0.55):
+                continue
+            sub_hsv = hsv[by:by + bh, bx:bx + bw]
+            white_ratio = float((cv2.inRange(sub_hsv, (0, 0, 215), (180, 65, 255)) > 0).mean())
+            if 0.04 <= white_ratio <= 0.35:
+                return (x0 + bx + bw // 2, y0 + by + bh // 2)
+        return (None, None)
+
     def _tap_empty_until_chest_continue(self):
-        '''After ``chestclaim`` was clicked: tap center-right (±85px) until ``chestcontinue.png``, then click it (home).'''
+        '''Tap the chest center repeatedly (4+ times) until the reward ``Continue`` button appears, then click it.'''
         CHEST_TAP_TIMEOUT = 120
         deadline = time.time() + CHEST_TAP_TIMEOUT
         taps = 0
@@ -2328,17 +2574,14 @@ deselect, which would eat the upcoming Attack click.'''
             self.input.click_at(nx, ny, rand = False)
             taps += 1
             t0 = time.time()
-            if self.stop_event.wait(0.15):
+            if self.stop_event.wait(0.20):
                 return None
             frame2 = self.window.screenshot()
             if not frame2 is None:
                 self._update_config_size(frame2)
-                bot_roi = VisionService.bottom_half_region(frame2)
-                (tx, ty) = self.vision.find_template(frame2, 'chestcontinue.png', region = bot_roi)
-                if not tx and taps % 4 == 0:
-                    (tx, ty) = self._match_ui_control(frame2, 'chestcontinue.png', region = bot_roi)
+                (tx, ty) = self._find_chest_continue_button(frame2)
                 if tx:
-                    logger.info('Chest reward: Continue button found at (%d, %d); clicking', int(tx), int(ty))
+                    logger.info('Chest reward: Continue button found at (%d, %d) after %d tap(s); clicking', int(tx), int(ty), taps)
                     self.input.click(tx, ty, pause = 0.4)
                     if self.stop_event.wait(0.4):
                         return None
@@ -2353,7 +2596,7 @@ deselect, which would eat the upcoming Attack click.'''
                         continue
                     return None
             elapsed = time.time() - t0
-            to_wait = max(0.05, 0.5 - elapsed)
+            to_wait = max(0.05, 0.45 - elapsed)
             if self.stop_event.wait(to_wait):
                 return None
         logger.warning(f'''chestcontinue.png not seen within {int(CHEST_TAP_TIMEOUT)}s after chest claim; continuing bot loop''')  # [recovered: decompiler misnested this inside the loop, ending the tap-through after one tap]
@@ -2440,6 +2683,10 @@ deselect, which would eat the upcoming Attack click.'''
                 self._record_raid_result(frame)
                 logger.info('Recovery: chestclaim.png visible — running chest flow')
                 self.input.click(cx, cy, pause=0.25)
+                self._tap_empty_until_chest_continue()
+                continue
+            if self._is_chest_tap_screen(frame):
+                logger.info('Recovery: chest Tap! screen visible — running chest open flow')
                 self._tap_empty_until_chest_continue()
                 continue
             sx, sy = self.vision.find_template(frame, 'surrender.png', region=bot_roi)

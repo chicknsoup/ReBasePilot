@@ -38,13 +38,18 @@ PAGE_LABELS = [
 ]
 
 
+def format_window_title(profile: str = '', version: str = __version__) -> str:
+    base = f'BaseLooter v{version}' if version else 'BaseLooter'
+    return f'{base} — {profile}' if profile else base
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         from app.utils.common import get_profile_name
 
         profile = get_profile_name()
-        self.setWindowTitle(f'BaseLooter — {profile}' if profile else 'BaseLooter')
+        self.setWindowTitle(format_window_title(profile, __version__))
         self.resize(*WINDOW_DEFAULT)
         self.setMinimumSize(*WINDOW_MIN)
 
