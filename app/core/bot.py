@@ -60,7 +60,10 @@ _AUTO_UPGRADE_SCAN_INTERVAL_SECONDS = 600
 _IDLE_RECHECK_SECONDS = 300
 _CLAN_UNCALIBRATED_BACKOFF_SECONDS = 3600
 _CLAN_CLOCK_NEVER = float('-inf')
-_NEXT_CLEAR_POLLS = 8
+_NEXT_CLEAR_POLLS = 10
+_NEXT_CLEAR_POLL_INTERVAL = 0.3
+_NEXT_CLICK_ATTEMPTS = 3
+_NEXT_BASE_DIFF_FLOOR = 18.0
 _NEXT_SETTLE_SECONDS = 1.0
 _LOOT_READ_POLLS = 6
 _LOOT_READ_SAMPLES = 3
@@ -1864,7 +1867,8 @@ deselect, which would eat the upcoming Attack click.'''
             self._dismiss_open_popup()
             return 'no_attack'
         if not ranked_fill:
-            self._skip_low_loot_bases()
+            if self._skip_low_loot_bases() is False:
+                return 'no_attack'
         frame = self.window.screenshot()
         if frame is None:
             return
@@ -1897,58 +1901,85 @@ deselect, which would eat the upcoming Attack click.'''
         self._wait_for_battle_end(is_sneaky=method_id == 1)
         return None
 
+    def _find_next_base_button(self, frame):
+        """Locate ``nextbase.png`` in the bottom-right quadrant (with full-frame fallback)."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return (None, None)
+        h, w = frame.shape[:2]
+        br_roi = (w // 2, h // 2, w - w // 2, h - h // 2)
+        nx, ny = self.vision.find_template(frame, TEMPLATE_NEXT_BASE, threshold=0.75, region=br_roi)
+        if nx:
+            return (nx, ny)
+        return self.vision.find_template(frame, TEMPLATE_NEXT_BASE, threshold=0.75)
+
+    @staticmethod
+    def _base_scene_changed(prev_frame, cur_frame):
+        """True when the center battlefield pixels differ significantly (new base loaded)."""
+        if prev_frame is None or cur_frame is None:
+            return False
+        if prev_frame.shape != cur_frame.shape or not getattr(cur_frame, 'size', 0):
+            return True
+        h, w = cur_frame.shape[:2]
+        y0, y1 = int(h * 0.25), int(h * 0.70)
+        x0, x1 = int(w * 0.30), int(w * 0.70)
+        if y1 <= y0 or x1 <= x0:
+            return False
+        diff = cv2.absdiff(prev_frame[y0:y1, x0:x1], cur_frame[y0:y1, x0:x1])
+        return float(np.mean(diff)) >= _NEXT_BASE_DIFF_FLOOR
+
     def _skip_low_loot_bases(self):
         """On the battle-prep screen: press Next while the base holds less than the\nconfigured minimum loot.\n\nEach Next costs another search fee, so the number of skips per cycle is capped\nand the cap is the user\'s (Settings → Minimum loot to attack). Two things\ndeliberately fall through to attacking rather than stalling the farm loop: a\nloot panel that cannot be read (OCR missing — the filter is an optimisation,\nnot a safety rail) and a missing Next button.\n"""
         lf = getattr(self, '_loot_filter', None)
         if lf is None or not lf.enabled or getattr(self, '_loot_filter_off', False):
-            return None
-        else:
-            if not get_template_path(TEMPLATE_NEXT_BASE).exists():
-                self._loot_filter_off = True
-                msg = f'Loot filter: {TEMPLATE_NEXT_BASE} not captured — attacking every base. Capture it in Settings → Clan assist → Capture templates.'
-                logger.warning(msg)
-                cb = getattr(self, '_status_callback', None)
-                if cb:
-                    cb(msg)
-                return None
-            else:
-                for _ in range(max(1, int(lf.max_skips))):
-                    self._check_stop()
-                    loot = self._read_base_loot()
-                    if loot is None:
-                        logger.info('Loot filter: could not read this base loot (see the LootFilter lines) — attacking it')
-                        return
-                    else:
-                        gold, elixir, dark = loot
-                        if meets(loot, lf):
-                            logger.info('Loot filter: base holds %s gold / %s elixir / %s dark — attacking', gold, elixir, dark)
-                            return
-                        else:
-                            confirm = self._read_base_loot(polls=2)
-                            if confirm is None or meets(confirm, lf):
-                                logger.info('Loot filter: second read of this base disagreed (%s vs %s) — attacking it', loot, confirm)
-                                return
-                            else:
-                                frame = self.window.screenshot()
-                                if frame is None:
-                                    return
-                                else:
-                                    self._update_config_size(frame)
-                                    nx, ny = self.vision.find_template(frame, TEMPLATE_NEXT_BASE)
-                                    if not nx:
-                                        logger.warning('Loot filter: %s gold / %s elixir is below %s but Next was not found — attacking this base', gold, elixir, lf.summary())
-                                        return
-                                    else:
-                                        self._bases_skipped = getattr(self, '_bases_skipped', 0) + 1
-                                        logger.info('Loot filter: skipping a base with %s gold / %s elixir (want %s) — %d skipped this session', gold, elixir, lf.summary(), self._bases_skipped)
-                                        cb = getattr(self, '_status_callback', None)
-                                        if cb:
-                                            cb(f'Skipping base: {self._fmt_resource(gold)} gold / {self._fmt_resource(elixir)} elixir')
-                                        self._emit_state(skipped=self._bases_skipped)
-                                        self.input.click(nx, ny, pause=0.4)
-                                        if not self._wait_for_next_base():
-                                            raise RuntimeError('Loot filter: the next base did not load; deployment stopped until the battlefield is verified.')
-                logger.info('Loot filter: %d skips used on this cycle — attacking this base', lf.max_skips)
+            return True
+        if not get_template_path(TEMPLATE_NEXT_BASE).exists():
+            self._loot_filter_off = True
+            msg = f'Loot filter: {TEMPLATE_NEXT_BASE} not captured — attacking every base. Capture it in Settings → Clan assist → Capture templates.'
+            logger.warning(msg)
+            cb = getattr(self, '_status_callback', None)
+            if cb:
+                cb(msg)
+            return True
+        for _ in range(max(1, int(lf.max_skips))):
+            self._check_stop()
+            loot = self._read_base_loot()
+            if loot is None:
+                logger.info('Loot filter: could not read this base loot (see the LootFilter lines) — attacking it')
+                return True
+            gold, elixir, dark = loot
+            if meets(loot, lf):
+                logger.info('Loot filter: base holds %s gold / %s elixir / %s dark — attacking', gold, elixir, dark)
+                return True
+            confirm = self._read_base_loot(polls=2)
+            if confirm is None or meets(confirm, lf):
+                logger.info('Loot filter: second read of this base disagreed (%s vs %s) — attacking it', loot, confirm)
+                return True
+            frame = self.window.screenshot()
+            if frame is None:
+                return True
+            self._update_config_size(frame)
+            nx, ny = self._find_next_base_button(frame)
+            if not nx:
+                logger.warning('Loot filter: %s gold / %s elixir is below %s but Next was not found — attacking this base', gold, elixir, lf.summary())
+                return True
+            self._bases_skipped = getattr(self, '_bases_skipped', 0) + 1
+            logger.info('Loot filter: skipping a base with %s gold / %s elixir (want %s) — %d skipped this session', gold, elixir, lf.summary(), self._bases_skipped)
+            cb = getattr(self, '_status_callback', None)
+            if cb:
+                cb(f'Skipping base: {self._fmt_resource(gold)} gold / {self._fmt_resource(elixir)} elixir')
+            self._emit_state(skipped=self._bases_skipped)
+            self.input.click(nx, ny, pause=0.05)
+            status = self._wait_for_next_base(prev_frame=frame, prev_loot=loot)
+            if status == 'attack_now':
+                logger.info('Loot filter: scout timer expired while skipping — attacking current base')
+                return True
+            if status != 'loaded':
+                self._check_stop()
+                logger.warning('Loot filter: the next base did not load after retries — recovering to Home screen instead of deploying blindly')
+                return False
+        logger.info('Loot filter: %d skips used on this cycle — attacking this base', lf.max_skips)
+        return True
+
     def _battle_prep_visible(self, frame):
         """True while the battle-prep controls (End Battle / Surrender) are on screen."""
         bot_roi = VisionService.bottom_half_region(frame)
@@ -1961,30 +1992,64 @@ deselect, which would eat the upcoming Attack click.'''
             if x:
                 return True
         return False
-    def _wait_for_next_base(self):
-        """After pressing Next: let the old base clear, then wait for the new one.\n\nLive repro: the loot read fired ~1s after Next, while the *old* battle-prep\nscreen was still up, so it came back unreadable and the bot attacked a base that\nhad not finished loading — \"Troop sneaky not found!\", because the deploy bar had\nnot rendered either. Waiting for the controls to disappear first is what makes\nthe wait that follows mean \"the next base\", not \"the last one\".\n"""
+
+    def _wait_for_next_base(self, prev_frame=None, prev_loot=None):
+        """After pressing Next: verify the old base clears (re-clicking Next if eaten) and wait for the new base."""
         cleared = False
-        for _ in range(_NEXT_CLEAR_POLLS):
-            self._check_stop()
-            frame = self.window.screenshot()
-            if frame is not None and getattr(frame, 'size', 0):
+        for attempt in range(_NEXT_CLICK_ATTEMPTS):
+            for poll_idx in range(_NEXT_CLEAR_POLLS):
+                self._check_stop()
+                frame = self.window.screenshot()
+                if frame is not None and getattr(frame, 'size', 0):
                     self._update_config_size(frame)
                     if not self._battle_prep_visible(frame):
                         cleared = True
                         break
-            if self.stop_event.wait(0.5):
-                return False
+                    if poll_idx >= 1 and self._base_scene_changed(prev_frame, frame):
+                        cur_loot = read_enemy_loot(frame)
+                        if cur_loot is not None and (prev_loot is None or cur_loot[:2] != prev_loot[:2]):
+                            logger.info('Loot filter: fast base transition detected — continuing')
+                            if self.stop_event.wait(_NEXT_SETTLE_SECONDS * 0.5):
+                                self._check_stop()
+                                return 'failed'
+                            return 'loaded'
+                if self.stop_event.wait(_NEXT_CLEAR_POLL_INTERVAL):
+                    self._check_stop()
+                    return 'failed'
+            if cleared:
+                break
+            self._check_stop()
+            check_frame = self.window.screenshot()
+            if check_frame is None or not getattr(check_frame, 'size', 0):
+                continue
+            self._update_config_size(check_frame)
+            if not self._battle_prep_visible(check_frame):
+                cleared = True
+                break
+            if self._base_scene_changed(prev_frame, check_frame):
+                logger.info('Loot filter: new base already visible after Next — continuing')
+                return 'loaded'
+            rnx, rny = self._find_next_base_button(check_frame)
+            if not rnx:
+                return 'attack_now'
+            if attempt + 1 < _NEXT_CLICK_ATTEMPTS:
+                logger.info(
+                    'Loot filter: %s still on screen — click was eaten (attempt %d/%d); re-clicking',
+                    TEMPLATE_NEXT_BASE,
+                    attempt + 1,
+                    _NEXT_CLICK_ATTEMPTS - 1,
+                )
+                self.input._ensure_surface_active(self.window.hwnd, force=True)
+                self.input.click(rnx, rny, pause=0.05)
         if not cleared:
-            return False
-        else:
-            sx, _sy = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=30, error=False)
-            if not sx:
-                return False
-            else:
-                if self.stop_event.wait(_NEXT_SETTLE_SECONDS):
-                    return False
-                else:
-                    return True
+            return 'failed'
+        sx, _sy = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=30, error=False)
+        if not sx:
+            return 'failed'
+        if self.stop_event.wait(_NEXT_SETTLE_SECONDS):
+            self._check_stop()
+            return 'failed'
+        return 'loaded'
     def _read_base_loot(self, polls=_LOOT_READ_POLLS, samples=_LOOT_READ_SAMPLES):
         """OCR the enemy loot panel and fold several reads into one.\n\nRetries while the panel has not rendered yet, then keeps reading until it has\n``samples`` successful reads to combine — a single read of this panel is wrong\nabout half the time on a live client (dropped digit: 705,559 read as 70,559),\nand one low read is the difference between skipping a good base and raiding it.\nReturns the combined triplet, or None once the polls are spent.\n"""
         reads = []

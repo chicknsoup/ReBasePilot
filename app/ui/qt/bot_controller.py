@@ -15,6 +15,7 @@ logger = setup_logger('BotController')
 # session. User stops (InterruptedError) never restart.
 _RESTART_MAX_CONSECUTIVE = 5
 _RESTART_BACKOFF_SECONDS = 20
+_HEALTHY_RUN_RESET_SECONDS = 180
 
 def _clan_options(profile, *, donate, request):
     """Run-page toggles + profile preferences -> the bot's ClanOptions."""
@@ -63,17 +64,21 @@ class BotController(QObject):
             def on_state(payload):
                 if self._restart_generation == generation:
                     self.stateChanged.emit(dict(payload))
-            def on_loot(gold, elixir, dark, elapsed):
-                if self._restart_generation == generation:
-                    self.lootChanged.emit(int(gold), int(elixir), int(dark), float(elapsed))
             consecutive_failures = 0
             restarts = 0
+            def on_loot(gold, elixir, dark, elapsed):
+                nonlocal consecutive_failures
+                if self._restart_generation == generation:
+                    if int(gold) > 0 or int(elixir) > 0 or int(dark) > 0:
+                        consecutive_failures = 0
+                    self.lootChanged.emit(int(gold), int(elixir), int(dark), float(elapsed))
             while True:
                 if self._restart_generation != generation or run_stop_event.is_set():
                     break
                 attempt_msg = f'Session #{restarts + 1}' if restarts else None
                 if attempt_msg:
                     self.statusChanged.emit(attempt_msg, False)
+                attempt_started_mono = time.monotonic()
                 try:
                     profile = load_profile_settings()
                     self._bot.start(method, minutes, star_bonus=star_bonus, status_callback=on_status, loot_callback=on_loot, state_callback=on_state, multi_run_players=multi_run_players, ranked_fill=ranked_fill, upgrade_walls=upgrade_walls, earthquake_method=profile.earthquake_method, builder_base=builder_base, loot_prioritise=loot_prioritise, wall_upgrade_threshold=profile.wall_upgrade_threshold_m * 1000000, auto_upgrade=auto_upgrade, reserve_builders=profile.reserve_builders, upgrade_order=profile.upgrade_order, clan_options=_clan_options(profile, donate=auto_donate, request=auto_request), loot_filter=_loot_filter(profile))
@@ -87,6 +92,8 @@ class BotController(QObject):
                     if self._restart_generation != generation or run_stop_event.is_set():
                         error_msg = None
                         break
+                    if time.monotonic() - attempt_started_mono >= _HEALTHY_RUN_RESET_SECONDS:
+                        consecutive_failures = 0
                     error_msg = str(exc)
                     consecutive_failures += 1
                     restarts += 1

@@ -15,6 +15,9 @@ WM_ACTIVATE = 0x0006
 WM_SETFOCUS = 0x0007
 WA_ACTIVE = 1
 _SURFACE_ACTIVATE_INTERVAL_S = 2.0
+_SURFACE_ACTIVATE_SETTLE_S = 0.015
+_CLICK_HOLD_S = 0.035
+_CLICK_AT_HOLD_S = 0.015
 _CLICK_JITTER_REF_PX = 15
 _REFERENCE_WIDTH = 2560
 class InputService:
@@ -45,6 +48,7 @@ class InputService:
         self._last_active_ts = now
         self._send_msg(hwnd, WM_ACTIVATE, WA_ACTIVE, 0)
         self._send_msg(hwnd, WM_SETFOCUS, 0, 0)
+        time.sleep(_SURFACE_ACTIVATE_SETTLE_S)
     def _click_jitter(self):
         """Half-width of the click scatter, in capture pixels.\n\nThe +/-15 px it was written with is 15 px *at the authoring resolution*. Left\nunscaled it doubles in relative terms on a 1299-wide window, where a builder-menu\nrow is only ~30 px tall — so the scatter, meant to keep clicks off one exact\npixel, was landing them on the row above or below.\n"""
         sz = self.window_service.get_outer_pixel_size()
@@ -105,20 +109,24 @@ class InputService:
             spread = self._click_jitter()
             x += random.randint(-spread, spread)
             y += random.randint(-spread, spread)
-        self._inject_click(x, y)
-        sleep_time = max(0.1, random.uniform(pause - pause * 0.2, pause + pause * 0.2))
+        self._inject_click(x, y, hold=_CLICK_HOLD_S)
+        min_sleep = 0.02 if pause < 0.1 else 0.1
+        sleep_time = max(min_sleep, random.uniform(pause - pause * 0.2, pause + pause * 0.2))
         if self.stop_event is not None:
             self.stop_event.wait(sleep_time)
         else:
             time.sleep(sleep_time)
-    def _inject_click(self, x, y):
+    def _inject_click(self, x, y, hold=_CLICK_HOLD_S):
         hwnd = self.window_service.hwnd
         if not hwnd:
             return
         else:
             self._ensure_surface_active(hwnd)
             lparam = self._make_lparam(int(x), int(y))
+            self._send_msg(hwnd, WM_MOUSEMOVE, 0, lparam)
             self._send_msg(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+            if hold > 0:
+                time.sleep(hold)
             self._send_msg(hwnd, WM_LBUTTONUP, 0, lparam)
     def click_at(self, x, y, rand=False):
         """Single mouse down/up at (x, y) with no delay (for chained clicks with custom timing)."""
@@ -126,7 +134,7 @@ class InputService:
             spread = self._click_jitter()
             x += random.randint(-spread, spread)
             y += random.randint(-spread, spread)
-        self._inject_click(int(x), int(y))
+        self._inject_click(int(x), int(y), hold=_CLICK_AT_HOLD_S)
     def mouse_down(self, x, y):
         hwnd = self.window_service.hwnd
         if not hwnd:
