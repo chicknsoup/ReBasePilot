@@ -794,7 +794,7 @@ deselect, which would eat the upcoming Attack click.'''
                         tokens = [w.text.strip() for w in sorted(top_line, key=lambda b: b.left) if w.text and w.text.strip()]
                         while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:
                             tokens.pop(0)
-                        name = ' '.join(tokens).strip(" ._-:|/\\'\"")
+                        name = ' '.join(tokens).strip(" ._-:|/\\'\"[](){}")
                         if 2 <= len(name) <= 24 and not name.isdigit() and sum(1 for ch in name if ch.isalnum()) >= 2:
                             return name
             except Exception:

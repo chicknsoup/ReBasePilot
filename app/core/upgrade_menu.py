@@ -157,7 +157,8 @@ def _parse_build_cards(frame, layout, initial_section, batch_labels=False, targe
         previous_bottom = cy + ch
     rows = []
     batch_words = None
-    if batch_labels:
+    use_neural_direct = VisionService.get_ocr_engine() == 'neural'
+    if batch_labels and not use_neural_direct:
         masked = np.zeros_like(frame)
         for cx, cy, cw, ch in layout.cards:
             x, y, width, height = int(cx + cw * 0.15), cy + 4, int(cw * 0.55), int(ch * 0.45)
@@ -167,7 +168,14 @@ def _parse_build_cards(frame, layout, initial_section, batch_labels=False, targe
         bottom = max((card[1] + card[3] for card in layout.cards))
         batch_words = VisionService.find_words_ocr(masked, region=(left, top, frame.shape[1] - left, bottom - top), white_text=True, brightness_floor=210, roi_upscale=3, tesseract_config='--psm 11') or []
     for cx, cy, cw, ch in layout.cards:
-        if batch_words is None:
+        if use_neural_direct:
+            from app.services.neural_ocr import NeuralOcrService
+            label_words = NeuralOcrService.recognize_line(
+                frame,
+                region=(int(cx + cw * 0.15), cy + 4, int(cw * 0.55), int(ch * 0.45)),
+                dark_bg=True,
+            ) or []
+        elif batch_words is None:
             label_words = VisionService.find_words_ocr(frame, region=(int(cx + cw * 0.15), cy + 4, int(cw * 0.55), int(ch * 0.45)), white_text=True, brightness_floor=210, roi_upscale=3, tesseract_config='--psm 7') or []
         else:
             label_words = [word for word in batch_words if cy + 4 <= word.top + word.height / 2 <= cy + 4 + int(ch * 0.45)]

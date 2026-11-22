@@ -98,7 +98,7 @@ class _NeuralEngine:
         bordered = cv2.copyMakeBorder(roi_bgr, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
         bh, bw = bordered.shape[:2]
         max_dim = max(bh, bw)
-        if max_dim < 960:
+        if bh < 380 and bw < 1100:
             scale = 2.0
         elif max_dim > 1920:
             scale = 1920.0 / float(max_dim)
@@ -302,3 +302,52 @@ class NeuralOcrService:
                     )
                     cursor += len(w) + 1
         return results
+
+    @staticmethod
+    def recognize_line(screen_img: np.ndarray, region, *, dark_bg: bool = True):
+        """Recognize a single known text-line ROI directly with rec_latin (skips DBNet)."""
+        from app.services.vision import OcrWordBox
+
+        if screen_img is None or not getattr(screen_img, 'size', 0):
+            return []
+        engine = NeuralOcrService._get_engine()
+        if engine is None:
+            return []
+
+        fh, fw = screen_img.shape[:2]
+        rx, ry, rw, rh = map(int, region)
+        rx = max(0, min(fw - 1, rx))
+        ry = max(0, min(fh - 1, ry))
+        rw = max(1, min(fw - rx, rw))
+        rh = max(1, min(fh - ry, rh))
+        crop = screen_img[ry:ry + rh, rx:rx + rw]
+        # Trim empty horizontal margins on dark-background white-text strips so BiLSTM doesn't waste time on blank space
+        if dark_bg and rw > rh * 2:
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            bright_cols = np.where(((hsv[:, :, 2] > 180) & (hsv[:, :, 1] < 90)).any(axis=0))[0]
+            if bright_cols.size == 0:
+                return []
+            c0 = max(0, int(bright_cols[0]) - 10)
+            c1 = min(rw, int(bright_cols[-1]) + 32)
+            if c1 - c0 >= 12:
+                crop = crop[:, c0:c1]
+                rx += c0
+                rw = c1 - c0
+        text, conf = engine.recognize_crop(crop, dark_bg=dark_bg)
+        text = text.strip(" []|")
+        if not text:
+            return []
+        words = [w for w in text.split() if w]
+        if not words:
+            return []
+        if len(words) == 1:
+            return [OcrWordBox(left=rx, top=ry, width=rw, height=rh, text=words[0], confidence=float(conf))]
+        total_chars = max(1, sum(len(w) for w in words) + len(words) - 1)
+        cursor = 0
+        out: List[OcrWordBox] = []
+        for w in words:
+            w_left = rx + int(round(rw * (cursor / float(total_chars))))
+            w_width = max(1, int(round(rw * (len(w) / float(total_chars)))))
+            out.append(OcrWordBox(left=w_left, top=ry, width=w_width, height=rh, text=w, confidence=float(conf)))
+            cursor += len(w) + 1
+        return out
