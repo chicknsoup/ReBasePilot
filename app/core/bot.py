@@ -761,14 +761,15 @@ deselect, which would eat the upcoming Attack click.'''
             return None
         fh, fw = frame.shape[:2]
         ui_s = max(1.0, min(1.45, float(getattr(VisionService, '_active_ui_scale', 1.0))))
-        # Account name sits immediately right of the top-left Town Hall badge and above the clan name.
-        x0 = max(0, int(round(fw * 0.070 * ui_s)))
-        y0 = max(0, int(round(fh * 0.032 * ui_s)))
-        rw = max(1, min(fw - x0, int(round(fw * 0.20 * ui_s))))
-        rh = max(1, min(fh - y0, int(round(fh * 0.038 * ui_s))))
+        # Account name sits immediately right of the top-left Town Hall badge (past x~155px on 1600x900@240dpi)
+        # and above the clan name. Top-line filtering below keeps only the player name if clan text enters the bottom.
+        x0 = max(0, int(round(fw * 0.082 * ui_s)))
+        y0 = max(0, int(round(fh * 0.028 * ui_s)))
+        rw = max(1, min(fw - x0, int(round(fw * 0.22 * ui_s))))
+        rh = max(1, min(fh - y0, int(round(fh * 0.056 * ui_s))))
         region = (x0, y0, rw, rh)
         words = []
-        for psm in ('--psm 7', '--psm 6'):
+        for psm in ('--psm 6', '--psm 7'):
             try:
                 words = VisionService.find_words_ocr(
                     frame,

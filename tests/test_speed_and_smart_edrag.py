@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.2.8')
-        self.assertEqual(format_window_title('', '1.2.8'), 'BaseLooter v1.2.8')
-        self.assertEqual(format_window_title('Main', '1.2.8'), 'BaseLooter v1.2.8 — Main')
+        self.assertEqual(__version__, '1.2.9')
+        self.assertEqual(format_window_title('', '1.2.9'), 'BaseLooter v1.2.9')
+        self.assertEqual(format_window_title('Main', '1.2.9'), 'BaseLooter v1.2.9 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
