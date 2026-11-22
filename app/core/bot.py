@@ -756,18 +756,81 @@ deselect, which would eat the upcoming Attack click.'''
 
     @staticmethod
     def _read_home_account_name(frame):
-        """Read the player's account name from the top-left Home Village HUD."""
+        """Read the player's account name from the top-left Home Village HUD.
+
+        Isolates pure-white glyph pixels immediately right of the Town Hall badge,
+        keeps only the top contiguous word run (dropping clan text below and bright
+        village scenery to the right), and feeds a crisp black-on-white mask to OCR.
+        """
         if frame is None or not getattr(frame, 'size', 0):
             return None
         fh, fw = frame.shape[:2]
         ui_s = max(1.0, min(1.45, float(getattr(VisionService, '_active_ui_scale', 1.0))))
-        # Account name sits immediately right of the top-left Town Hall badge (past x~155px on 1600x900@240dpi)
-        # and above the clan name. Top-line filtering below keeps only the player name if clan text enters the bottom.
-        x0 = max(0, int(round(fw * 0.082 * ui_s)))
-        y0 = max(0, int(round(fh * 0.028 * ui_s)))
-        rw = max(1, min(fw - x0, int(round(fw * 0.22 * ui_s))))
-        rh = max(1, min(fh - y0, int(round(fh * 0.056 * ui_s))))
-        region = (x0, y0, rw, rh)
+        x0 = max(0, int(round(fw * 0.072 * ui_s)))
+        y0 = max(0, int(round(fh * 0.022 * ui_s)))
+        x1 = min(fw, int(round(fw * 0.24 * ui_s)))
+        y1 = min(fh, int(round(fh * 0.082 * ui_s)))
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        roi = frame[y0:y1, x0:x1]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        white = cv2.inRange(hsv, (0, 0, 220), (180, 48, 255))
+        _n, _lbl, stats, _cen = cv2.connectedComponentsWithStats(white)
+        min_h = max(9, int(round(fh * 0.011)))
+        max_h = max(24, int(round(fh * 0.036)))
+        cands = [
+            tuple(map(int, b[:4]))
+            for b in stats[1:]
+            if b[4] >= 10 and min_h <= b[3] <= max_h and b[2] <= max_h * 2.2
+        ]
+        if cands:
+            lines = []
+            for box in sorted(cands, key=lambda b: b[1] + b[3] * 0.5):
+                cy = box[1] + box[3] * 0.5
+                ln = next(
+                    (l for l in lines if abs(cy - (l[0][1] + l[0][3] * 0.5)) <= max(box[3], l[0][3]) * 0.55),
+                    None,
+                )
+                if ln is None:
+                    lines.append([box])
+                else:
+                    ln.append(box)
+            top_line = next((sorted(ln, key=lambda b: b[0]) for ln in lines if len(ln) >= 2), None)
+            if top_line:
+                med_h = sorted(b[3] for b in top_line)[len(top_line) // 2]
+                max_gap = max(16, int(round(med_h * 1.8)))
+                kept = [top_line[0]]
+                for box in top_line[1:]:
+                    prev = kept[-1]
+                    if box[0] - (prev[0] + prev[2]) <= max_gap:
+                        kept.append(box)
+                    else:
+                        break
+                bx0 = max(0, min(b[0] for b in kept) - 4)
+                by0 = max(0, min(b[1] for b in kept) - 4)
+                bx1 = min(white.shape[1], max(b[0] + b[2] for b in kept) + 4)
+                by1 = min(white.shape[0], max(b[1] + b[3] for b in kept) + 4)
+                inv = cv2.bitwise_not(white[by0:by1, bx0:bx1])
+                padded = cv2.copyMakeBorder(inv, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=255)
+                up = cv2.resize(padded, (padded.shape[1] * 3, padded.shape[0] * 3), interpolation=cv2.INTER_CUBIC)
+                up_bgr = cv2.cvtColor(up, cv2.COLOR_GRAY2BGR)
+                try:
+                    clean_words = VisionService.find_words_ocr(
+                        up_bgr,
+                        preprocess=False,
+                        roi_upscale=1,
+                        tesseract_config='--psm 7',
+                    ) or []
+                    raw = ' '.join(w.text.strip() for w in sorted(clean_words, key=lambda b: b.left) if w.text and w.text.strip())
+                    name = raw.strip(" ._-:|/\\'\"")
+                    if 2 <= len(name) <= 24 and not name.isdigit() and sum(1 for ch in name if ch.isalnum()) >= 2:
+                        return name
+                except Exception:
+                    pass
+
+        # Fallback to standard word OCR (also used by unit tests on synthetic frames)
+        region = (x0, y0, max(1, x1 - x0), max(1, y1 - y0))
         words = []
         for psm in ('--psm 6', '--psm 7'):
             try:
@@ -784,20 +847,16 @@ deselect, which would eat the upcoming Attack click.'''
                 break
         if not words:
             return None
-        # Keep only the top-most text line (player name sits above any sub-label)
         min_top = min(getattr(w, 'top', 0) for w in words)
-        line_tol = max(10, int(round(rh * 0.38)))
+        line_tol = max(10, int(round((y1 - y0) * 0.38)))
         top_line = [w for w in words if abs(getattr(w, 'top', 0) - min_top) <= line_tol]
         tokens = [w.text.strip() for w in sorted(top_line, key=lambda b: b.left) if w.text and w.text.strip()]
-        # Drop a stray XP-level number if it bled in from the left edge
         while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:
             tokens.pop(0)
-        name = ' '.join(tokens).strip()
-        # Reject empty, purely numeric, or implausibly noisy reads
+        name = ' '.join(tokens).strip(" ._-:|/\\'\"")
         if len(name) < 2 or len(name) > 24 or name.isdigit():
             return None
-        alnum_count = sum(1 for ch in name if ch.isalnum())
-        if alnum_count < 2:
+        if sum(1 for ch in name if ch.isalnum()) < 2:
             return None
         return name
 
