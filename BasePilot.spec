@@ -1,8 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 hiddenimports = collect_submodules('app')
+extra_binaries = []
+extra_datas = []
+try:
+    _ort_datas, _ort_bins, _ort_hidden = collect_all('onnxruntime')
+    extra_datas += _ort_datas
+    extra_binaries += _ort_bins
+    hiddenimports += _ort_hidden
+except Exception:
+    pass
 
 excludes = [
     'PySide6.Qt3DAnimation',
@@ -76,8 +85,8 @@ onefile_mode = os.environ.get('BASEPILOT_ONEFILE', '0') == '1'
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('templates', 'templates'), ('assets', 'assets'), ('tesseract', 'tesseract')],
+    binaries=extra_binaries,
+    datas=[('templates', 'templates'), ('assets', 'assets'), ('tesseract', 'tesseract')] + extra_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
