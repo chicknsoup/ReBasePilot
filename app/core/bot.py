@@ -69,14 +69,14 @@ _IDLE_RECHECK_SECONDS = 300
 _CLAN_UNCALIBRATED_BACKOFF_SECONDS = 3600
 _CLAN_CLOCK_NEVER = float('-inf')
 _NEXT_CLEAR_POLLS = 10
-_NEXT_CLEAR_POLL_INTERVAL = 0.3
+_NEXT_CLEAR_POLL_INTERVAL = 0.18
 _NEXT_CLICK_ATTEMPTS = 3
 _NEXT_BASE_DIFF_FLOOR = 18.0
-_NEXT_SETTLE_SECONDS = 0.45
+_NEXT_SETTLE_SECONDS = 0.30
 _LOOT_READ_POLLS = 6
 _LOOT_READ_SAMPLES = 3
 _BATTLE_WAIT_MAX_SECONDS = 135
-_BATTLE_NO_LOOT_GAIN_SECONDS = 15.0
+_BATTLE_NO_LOOT_GAIN_SECONDS = 12.0
 _BATTLE_ARMY_DEAD_STALL_SECONDS = 6.0
 _WALL_POPUP_SETTLE_POLLS = 6
 _WALL_REMOVE_ATTEMPTS = 2
@@ -875,8 +875,12 @@ deselect, which would eat the upcoming Attack click.'''
             return None
         return name
 
-    def _update_home_account_name(self, frame=None):
-        """Best-effort refresh of the active account name when on Home Village."""
+    def _update_home_account_name(self, frame=None, max_age_s=300.0):
+        """Best-effort refresh of the active account name when on Home Village (throttled)."""
+        now = time.monotonic()
+        last_ts = getattr(self, '_home_account_read_ts', 0.0)
+        if max_age_s > 0.0 and getattr(self, '_loot_account', None) and (now - last_ts) < max_age_s:
+            return
         if frame is None:
             win = getattr(self, 'window', None)
             if win is None:
@@ -889,6 +893,7 @@ deselect, which would eat the upcoming Attack click.'''
             return
         prev = getattr(self, '_loot_account', None)
         self._loot_account = name
+        self._home_account_read_ts = now
         if name != prev:
             logger.info('Home account detected: %s', name)
         self._emit_state(account=name)
@@ -2050,22 +2055,16 @@ deselect, which would eat the upcoming Attack click.'''
             if cb:
                 cb(msg)
         if a2x:
-            if self.stop_event.wait(0.2):
+            if self.stop_event.wait(0.15):
                 self._check_stop()
                 return 'no_attack'
-            self.input.click(a2x, a2y, pause=0.5)
+            self.input.click(a2x, a2y, pause=0.35)
             if ranked_fill:
                 rx, ry = self._wait_for_image('rankedattackconfirm.png', timeout=10)
                 if not rx:
                     logger.warning('rankedattackconfirm.png not found after attack2.png')
                 else:
                     self.input.click(rx, ry, pause=0.3)
-            else:
-                if not self.stop_event.wait(0.35):
-                    rx, ry = self._find_template_once('rankedattackconfirm.png')
-                    if rx:
-                        logger.info('Confirm Attack modal appeared after attack2.png — clicking Attack! (%d, %d)', rx, ry)
-                        self.input.click(rx, ry, pause=0.3)
         self._cloud_attack_aborted = False
         live_x, _ = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=6, error=False)
         for _ in range(3):
@@ -2967,6 +2966,7 @@ deselect, which would eat the upcoming Attack click.'''
                     else:
                         self._finish_unread_raid('account changed before a result could be recorded')
                         self._loot_account = username
+                        self._home_account_read_ts = time.monotonic()
                         self._emit_state(account=username)
                         self._advisor = None
                         self._research_advisor = None

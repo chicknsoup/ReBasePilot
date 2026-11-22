@@ -100,6 +100,8 @@ try:
             'endbattle.png',
             'surrender.png',
             'nextbase.png',
+        })
+        _LOCAL_MULTISCALE_TEMPLATES = frozenset({
             'returnhome.png',
             'returnhome2.png',
         })
@@ -129,6 +131,10 @@ try:
                 primary_factors = tuple(dict.fromkeys([round(active * f, 4) for f in VisionService._WALL_TEMPLATE_SCALE_FACTORS] + list(VisionService._WALL_TEMPLATE_SCALE_FACTORS)))
             elif template_name in VisionService._MULTISCALE_CHEST_TEMPLATES:
                 primary_factors = tuple(dict.fromkeys([round(active * f, 4) for f in VisionService._CHEST_TEMPLATE_SCALE_FACTORS] + list(VisionService._CHEST_TEMPLATE_SCALE_FACTORS)))
+            elif template_name in VisionService._LOCAL_MULTISCALE_TEMPLATES:
+                # End-of-battle Return Home button scales independently (often ~0.90x on 240-DPI MuMu)
+                # and must NOT overwrite the global Home/Battle _active_ui_scale (1.22x).
+                primary_factors = tuple(dict.fromkeys((1.0, 0.90, active, 1.15)))
             elif abs(active - 1.0) > 0.01:
                 primary_factors = (active, 1.0)
             else:
@@ -164,12 +170,12 @@ try:
 
             (best_tpl, best_score, best_factor) = _eval_factors(primary_factors)
             if best_score >= 0.78:
-                if need_calibration and best_score >= 0.85 and min(t_h, t_w) >= 20:
+                if need_calibration and template_name not in VisionService._LOCAL_MULTISCALE_TEMPLATES and best_score >= 0.85 and min(t_h, t_w) >= 20:
                     VisionService._active_ui_scale = float(best_factor)
                     VisionService._ui_scale_calibrated_size = (w_scr, h_scr)
                 return best_tpl
 
-            if need_calibration or template_name in VisionService._UI_SCALE_ANCHOR_TEMPLATES:
+            if (need_calibration and template_name not in VisionService._LOCAL_MULTISCALE_TEMPLATES) or template_name in VisionService._UI_SCALE_ANCHOR_TEMPLATES:
                 extra = [f for f in VisionService._UI_DPI_SCALE_CANDIDATES if all(abs(f - pf) > 0.01 for pf in primary_factors)]
                 if extra:
                     (cand_tpl, cand_score, cand_factor) = _eval_factors(extra)

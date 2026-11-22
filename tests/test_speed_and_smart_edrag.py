@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.2.12')
-        self.assertEqual(format_window_title('', '1.2.12'), 'BaseLooter v1.2.12')
-        self.assertEqual(format_window_title('Main', '1.2.12'), 'BaseLooter v1.2.12 — Main')
+        self.assertEqual(__version__, '1.3.0')
+        self.assertEqual(format_window_title('', '1.3.0'), 'BaseLooter v1.3.0')
+        self.assertEqual(format_window_title('Main', '1.3.0'), 'BaseLooter v1.3.0 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -486,6 +486,22 @@ class TestAccountBadgeAndHomeName(unittest.TestCase):
         # No outlined glyphs passed -> must not call preprocess=False clean OCR path
         for call in mock_ocr.call_args_list:
             self.assertNotEqual(call.kwargs.get('preprocess'), False)
+
+    def test_returnhome_match_at_090x_does_not_overwrite_global_122x_ui_scale(self):
+        # Simulate calibrated 240-DPI MuMu (1.22x) encountering a 0.90x returnhome.png button
+        VisionService._active_ui_scale = 1.22
+        VisionService._ui_scale_calibrated_size = (1600, 900)
+        tpl = cv2.imread(str(pathlib.Path(r'F:\ReBasePilot\templates\16_9\returnhome.png')))
+        self.assertIsNotNone(tpl)
+        sx, sy = 1600.0 / 2560.0, 900.0 / 1440.0
+        scaled_090 = cv2.resize(tpl, (int(round(tpl.shape[1] * sx * 0.90)), int(round(tpl.shape[0] * sy * 0.90))))
+        frame = np.zeros((900, 1600, 3), dtype=np.uint8)
+        frame[700:700 + scaled_090.shape[0], 650:650 + scaled_090.shape[1]] = scaled_090
+
+        v = VisionService()
+        rx, ry = v.find_template(frame, 'returnhome.png', region=VisionService.bottom_half_region(frame))
+        self.assertIsNotNone(rx)
+        self.assertAlmostEqual(VisionService._active_ui_scale, 1.22, places=2)
 
 
 if __name__ == '__main__':
