@@ -38,6 +38,9 @@ ATTACK_MIN_ELIXIR_K_DEFAULT = 500
 ATTACK_MIN_LOOT_K_MAX = 5000
 ATTACK_MAX_SKIPS_DEFAULT = 0
 ATTACK_MAX_SKIPS_MAX = 50
+OCR_ENGINE_TESSERACT = 'tesseract'
+OCR_ENGINE_NEURAL = 'neural'
+OCR_ENGINE_OPTIONS = (OCR_ENGINE_TESSERACT, OCR_ENGINE_NEURAL)
 @dataclass
 class ProfileSettings:
     earthquake_method: 'str' = EARTHQUAKE_METHOD_CURVE
@@ -55,6 +58,7 @@ class ProfileSettings:
     attack_min_gold_k: 'int' = ATTACK_MIN_GOLD_K_DEFAULT
     attack_min_elixir_k: 'int' = ATTACK_MIN_ELIXIR_K_DEFAULT
     attack_max_skips: 'int' = ATTACK_MAX_SKIPS_DEFAULT
+    ocr_engine: 'str' = OCR_ENGINE_TESSERACT
 def get_settings_path():
     dest = get_user_app_data_dir() / SETTINGS_FILENAME
     ensure_dir(dest.parent)
@@ -114,6 +118,12 @@ def _normalize_clan_donate_troop(raw):
         return raw.strip().lower()
     else:
         return CLAN_DONATE_TROOP_AUTO
+def _normalize_ocr_engine(raw):
+    if isinstance(raw, str) and raw.strip().lower() in OCR_ENGINE_OPTIONS:
+        return raw.strip().lower()
+    return OCR_ENGINE_TESSERACT
+
+
 def _normalize_int(raw, default, low, high):
     try:
         value = int(raw)
@@ -144,6 +154,7 @@ def load_profile_settings():
             attack_min_gold_k=_normalize_int(raw.get('attack_min_gold_k'), ATTACK_MIN_GOLD_K_DEFAULT, 0, ATTACK_MIN_LOOT_K_MAX),
             attack_min_elixir_k=_normalize_int(raw.get('attack_min_elixir_k'), ATTACK_MIN_ELIXIR_K_DEFAULT, 0, ATTACK_MIN_LOOT_K_MAX),
             attack_max_skips=_normalize_int(raw.get('attack_max_skips'), ATTACK_MAX_SKIPS_DEFAULT, 0, ATTACK_MAX_SKIPS_MAX),
+            ocr_engine=_normalize_ocr_engine(raw.get('ocr_engine')),
         )
     except (json.JSONDecodeError, OSError):
         return ProfileSettings()
@@ -167,6 +178,7 @@ def save_profile_settings(settings):
         attack_min_gold_k=_normalize_int(getattr(settings, 'attack_min_gold_k', ATTACK_MIN_GOLD_K_DEFAULT), ATTACK_MIN_GOLD_K_DEFAULT, 0, ATTACK_MIN_LOOT_K_MAX),
         attack_min_elixir_k=_normalize_int(getattr(settings, 'attack_min_elixir_k', ATTACK_MIN_ELIXIR_K_DEFAULT), ATTACK_MIN_ELIXIR_K_DEFAULT, 0, ATTACK_MIN_LOOT_K_MAX),
         attack_max_skips=_normalize_int(getattr(settings, 'attack_max_skips', ATTACK_MAX_SKIPS_DEFAULT), ATTACK_MAX_SKIPS_DEFAULT, 0, ATTACK_MAX_SKIPS_MAX),
+        ocr_engine=_normalize_ocr_engine(getattr(settings, 'ocr_engine', OCR_ENGINE_TESSERACT)),
     )
     payload = asdict(normalized)
     path.write_text(json.dumps(payload, indent=2), encoding='utf-8')

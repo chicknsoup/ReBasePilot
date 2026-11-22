@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.3.3')
-        self.assertEqual(format_window_title('', '1.3.3'), 'BaseLooter v1.3.3')
-        self.assertEqual(format_window_title('Main', '1.3.3'), 'BaseLooter v1.3.3 — Main')
+        self.assertEqual(__version__, '1.4.0')
+        self.assertEqual(format_window_title('', '1.4.0'), 'BaseLooter v1.4.0')
+        self.assertEqual(format_window_title('Main', '1.4.0'), 'BaseLooter v1.4.0 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -529,6 +529,58 @@ class TestAccountBadgeAndHomeName(unittest.TestCase):
         ax, ay = v.find_template(f_home, 'attack.png', region=VisionService.bottom_half_region(f_home))
         self.assertIsNotNone(ax)
         self.assertAlmostEqual(VisionService._active_ui_scale, 1.22, delta=0.05)
+
+
+class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
+    def tearDown(self):
+        VisionService.set_ocr_engine('tesseract')
+
+    def test_neural_models_bundled_and_available(self):
+        from app.services.neural_ocr import NeuralOcrService
+
+        self.assertTrue(NeuralOcrService.models_present())
+        self.assertTrue(NeuralOcrService.is_available())
+
+    def test_profile_settings_ocr_engine_roundtrip(self):
+        import tempfile
+        from app.utils import profile_settings_store as store
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_path = pathlib.Path(tmp) / 'settings.json'
+            with patch.object(store, 'get_settings_path', return_value=fake_path):
+                store.save_profile_settings(store.ProfileSettings(ocr_engine='neural'))
+                loaded = store.load_profile_settings()
+                self.assertEqual(loaded.ocr_engine, 'neural')
+
+                # Invalid values fall back to tesseract
+                self.assertEqual(store._normalize_ocr_engine('invalid_engine'), 'tesseract')
+
+    def test_neural_ocr_reads_home_account_name_and_battle_words(self):
+        VisionService.set_ocr_engine('neural')
+        self.assertEqual(VisionService.get_ocr_engine(), 'neural')
+
+        hud_crop = pathlib.Path(
+            r'C:\Users\chinhnc\.gemini\antigravity\brain\bb2b8194-fc00-477e-954b-7384172661d0'
+            r'\.user_uploaded\media_1795313750361_a6cc3882.png'
+        )
+        if hud_crop.exists():
+            crop = cv2.imread(str(hud_crop))
+            self.assertIsNotNone(crop)
+            canvas = np.zeros((900, 1600, 3), dtype=np.uint8)
+            ch, cw = crop.shape[:2]
+            canvas[:ch, :cw] = crop
+            self.assertEqual(Bot._read_home_account_name(canvas), 'Soup')
+
+        if REAL_FRAME_1600.exists():
+            frame = cv2.imread(str(REAL_FRAME_1600))
+            self.assertIsNotNone(frame)
+            words = VisionService.find_words_ocr(
+                frame,
+                region=(0, 0, 480, 300),
+                query='Available',
+                white_text=True,
+            )
+            self.assertTrue(any('available' in w.text.lower() for w in words), f'Got words: {words}')
 
 
 if __name__ == '__main__':

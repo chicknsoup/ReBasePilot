@@ -6,6 +6,7 @@ from PySide6.QtCore import QObject, Signal
 from app.core.bot import Bot
 from app.core.clan import ClanOptions
 from app.core.loot_filter import LootFilter
+from app.services.vision import VisionService
 from app.utils.logger import setup_logger
 from app.utils.profile_settings_store import load_profile_settings
 logger = setup_logger('BotController')
@@ -81,6 +82,7 @@ class BotController(QObject):
                 attempt_started_mono = time.monotonic()
                 try:
                     profile = load_profile_settings()
+                    VisionService.set_ocr_engine(profile.ocr_engine)
                     self._bot.start(method, minutes, star_bonus=star_bonus, status_callback=on_status, loot_callback=on_loot, state_callback=on_state, multi_run_players=multi_run_players, ranked_fill=ranked_fill, upgrade_walls=upgrade_walls, earthquake_method=profile.earthquake_method, builder_base=builder_base, loot_prioritise=loot_prioritise, wall_upgrade_threshold=profile.wall_upgrade_threshold_m * 1000000, auto_upgrade=auto_upgrade, reserve_builders=profile.reserve_builders, upgrade_order=profile.upgrade_order, clan_options=_clan_options(profile, donate=auto_donate, request=auto_request), loot_filter=_loot_filter(profile))
                     error_msg = None
                     break

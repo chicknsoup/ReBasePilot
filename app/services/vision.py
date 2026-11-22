@@ -90,6 +90,20 @@ try:
         _CHEST_TEMPLATE_SCALE_FACTORS = (1.0, 1.08, 1.12, 1.16, 0.92)
         _active_ui_scale: float = 1.0
         _ui_scale_calibrated_size: Optional[Tuple[int, int]] = None
+        _ocr_engine: str = 'tesseract'
+
+        @staticmethod
+        def set_ocr_engine(engine: str):
+            val = str(engine or 'tesseract').strip().lower()
+            if val not in ('tesseract', 'neural'):
+                val = 'tesseract'
+            if VisionService._ocr_engine != val:
+                logger.info('OCR engine switched: %s -> %s', VisionService._ocr_engine, val)
+            VisionService._ocr_engine = val
+
+        @staticmethod
+        def get_ocr_engine() -> str:
+            return VisionService._ocr_engine
         _UI_DPI_SCALE_CANDIDATES = (1.0, 1.22, 1.15, 1.28, 1.35, 0.90, 0.85)
         _UI_SCALE_ANCHOR_TEMPLATES = frozenset({
             'attack.png',
@@ -1330,6 +1344,30 @@ Returns:
 '''
             if VisionService._stop_event is not None and VisionService._stop_event.is_set():
                 raise InterruptedError('Bot stopped by user')
+            if VisionService._ocr_engine == 'neural':
+                try:
+                    from app.services.neural_ocr import NeuralOcrService
+                    if NeuralOcrService.is_available():
+                        neural_words = NeuralOcrService.find_words(screen_img, region=region, white_text=white_text)
+                        if VisionService._stop_event is not None and VisionService._stop_event.is_set():
+                            raise InterruptedError('Bot stopped by user')
+                        if query is not None:
+                            qnorm = query.strip() if case_sensitive else query.strip().lower()
+                            neural_words = [
+                                w for w in neural_words
+                                if VisionService._ocr_query_matches(
+                                    w.text,
+                                    qnorm,
+                                    case_sensitive=case_sensitive,
+                                    match_alnum_only=match_alnum_only,
+                                    fuzzy_min_ratio=fuzzy_min_ratio,
+                                )
+                            ]
+                        return neural_words
+                except InterruptedError:
+                    raise
+                except Exception as exc:
+                    logger.warning('Neural OCR failed; falling back to Tesseract: %s', exc)
             if pytesseract is None:
                 logger.error('pytesseract is not installed; pip install pytesseract and install the Tesseract OCR binary')
                 return []

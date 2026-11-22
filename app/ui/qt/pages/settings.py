@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from app.config import resolve_aspect_key
 from app.core.clan import donate_troop_template_names, missing_templates
 from app.services.display import DisplayService
+from app.services.vision import VisionService
 from app.services.window import DescendantInfo, WindowCandidate, WindowService
 from app.ui.qt.point_picker import PointPickerDialog
 from app.ui.qt.template_capture import TemplateCaptureDialog
@@ -49,6 +50,8 @@ from app.utils.profile_settings_store import (
     CLAN_REQUEST_INTERVAL_M_MAX,
     CLAN_REQUEST_INTERVAL_M_MIN,
     EARTHQUAKE_METHOD_OPTIONS,
+    OCR_ENGINE_NEURAL,
+    OCR_ENGINE_TESSERACT,
     RESERVE_BUILDERS_MAX,
     WALL_UPGRADE_THRESHOLD_M_MAX,
     ProfileSettings,
@@ -62,6 +65,11 @@ from app.utils.window_settings_store import (
 )
 
 logger = setup_logger('SettingsPage')
+
+OCR_ENGINE_CHOICES = (
+    ('Tesseract 5 (Default)', OCR_ENGINE_TESSERACT),
+    ('Neural ONNX (PP-OCRv4 + Latin)', OCR_ENGINE_NEURAL),
+)
 
 CLAN_TROOP_CHOICES = (
     ('Auto (first troop found)', 'auto'),
@@ -363,6 +371,18 @@ class SettingsPage(QWidget):
         loot_grid.addWidget(eq_lbl, 1, 2)
         loot_grid.addWidget(self._earthquake, 1, 3)
 
+        ocr_lbl = QLabel('OCR engine:')
+        ocr_lbl.setStyleSheet(f"color: {TOKENS['text_muted']};")
+        self._ocr_engine = QComboBox()
+        for label, _key in OCR_ENGINE_CHOICES:
+            self._ocr_engine.addItem(label)
+        self._ocr_engine.setToolTip(
+            'Tesseract 5: traditional CPU OCR.\n'
+            'Neural ONNX: PP-OCRv4 DBNet + EasyOCR Latin BiLSTM-CTC (better on stylized game text and scenery).'
+        )
+        loot_grid.addWidget(ocr_lbl, 2, 0)
+        loot_grid.addWidget(self._ocr_engine, 2, 1, 1, 3)
+
         loot_sub.card_layout.addLayout(loot_grid)
         card.card_layout.addWidget(loot_sub)
 
@@ -640,8 +660,14 @@ class SettingsPage(QWidget):
         self._attack_min_gold.setValue(settings.attack_min_gold_k)
         self._attack_min_elixir.setValue(settings.attack_min_elixir_k)
         self._attack_max_skips.setValue(settings.attack_max_skips)
+        ocr_keys = [key for _label, key in OCR_ENGINE_CHOICES]
+        self._ocr_engine.setCurrentIndex(
+            ocr_keys.index(settings.ocr_engine) if settings.ocr_engine in ocr_keys else 0
+        )
+        VisionService.set_ocr_engine(settings.ocr_engine)
 
     def _on_save(self):
+        selected_ocr = OCR_ENGINE_CHOICES[max(0, self._ocr_engine.currentIndex())][1]
         save_profile_settings(
             ProfileSettings(
                 earthquake_method=self._earthquake.currentText(),
@@ -659,8 +685,10 @@ class SettingsPage(QWidget):
                 attack_min_gold_k=self._attack_min_gold.value(),
                 attack_min_elixir_k=self._attack_min_elixir.value(),
                 attack_max_skips=self._attack_max_skips.value(),
+                ocr_engine=selected_ocr,
             )
         )
+        VisionService.set_ocr_engine(selected_ocr)
         self._save_badge.setText('✓ Saved')
         QTimer.singleShot(2000, lambda: self._save_badge.setText(''))
         self._flash_status_bar('Settings saved')

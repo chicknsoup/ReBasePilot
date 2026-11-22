@@ -773,6 +773,29 @@ deselect, which would eat the upcoming Attack click.'''
         if x1 <= x0 or y1 <= y0:
             return None
 
+        # When Neural OCR is selected, run DBNet + latin_g2 directly on the color HUD ROI (scenery-agnostic)
+        if VisionService.get_ocr_engine() == 'neural':
+            try:
+                from app.services.neural_ocr import NeuralOcrService
+                if NeuralOcrService.is_available():
+                    n_words = NeuralOcrService.find_words(
+                        frame,
+                        region=(x0, y0, max(1, x1 - x0), max(1, y1 - y0)),
+                        white_text=True,
+                    )
+                    if n_words:
+                        min_top = min(w.top for w in n_words)
+                        line_tol = max(10, int(round((y1 - y0) * 0.38)))
+                        top_line = [w for w in n_words if abs(w.top - min_top) <= line_tol]
+                        tokens = [w.text.strip() for w in sorted(top_line, key=lambda b: b.left) if w.text and w.text.strip()]
+                        while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:
+                            tokens.pop(0)
+                        name = ' '.join(tokens).strip(" ._-:|/\\'\"")
+                        if 2 <= len(name) <= 24 and not name.isdigit() and sum(1 for ch in name if ch.isalnum()) >= 2:
+                            return name
+            except Exception:
+                pass
+
         roi = frame[y0:y1, x0:x1]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         # Preserve the light-silver lower gradient of Clash's font (V~185-215) so 'o'/'u' bowls stay closed
