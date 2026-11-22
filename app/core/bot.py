@@ -775,7 +775,8 @@ deselect, which would eat the upcoming Attack click.'''
 
         roi = frame[y0:y1, x0:x1]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        white = cv2.inRange(hsv, (0, 0, 220), (180, 48, 255))
+        # Preserve the light-silver lower gradient of Clash's font (V~185-215) so 'o'/'u' bowls stay closed
+        white = cv2.inRange(hsv, (0, 0, 185), (180, 55, 255))
         _n, _lbl, stats, _cen = cv2.connectedComponentsWithStats(white)
         min_h = max(9, int(round(fh * 0.011)))
         max_h = max(24, int(round(fh * 0.036)))
@@ -813,7 +814,7 @@ deselect, which would eat the upcoming Attack click.'''
                 by1 = min(white.shape[0], max(b[1] + b[3] for b in kept) + 4)
                 inv = cv2.bitwise_not(white[by0:by1, bx0:bx1])
                 padded = cv2.copyMakeBorder(inv, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=255)
-                up = cv2.resize(padded, (padded.shape[1] * 3, padded.shape[0] * 3), interpolation=cv2.INTER_CUBIC)
+                up = cv2.resize(padded, (padded.shape[1] * 3, padded.shape[0] * 3), interpolation=cv2.INTER_LINEAR)
                 up_bgr = cv2.cvtColor(up, cv2.COLOR_GRAY2BGR)
                 try:
                     clean_words = VisionService.find_words_ocr(
