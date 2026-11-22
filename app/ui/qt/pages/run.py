@@ -73,6 +73,8 @@ class RunPage(QWidget):
         self._preset_buttons: list[tuple[int, object]] = []
         self._session_start_mono: Optional[float] = None
         self._log_tail_pos = 0
+        self._account_name = ''
+        self._current_state_kind = 'stopped'
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(SPACING['lg'], SPACING['md'], SPACING['lg'], SPACING['md'])
@@ -155,8 +157,9 @@ class RunPage(QWidget):
 
         row.addStretch()
 
-        self._state_badge = QLabel('● STOPPED')
+        self._state_badge = QLabel('● —')
         self._state_badge.setObjectName('StatusBadge')
+        self._state_badge.setToolTip('Active Clash of Clans account (updates on Home Village)')
         row.addWidget(self._state_badge)
 
         self._session_timer_lbl = QLabel('00:00:00')
@@ -180,7 +183,15 @@ class RunPage(QWidget):
         card.card_layout.addLayout(row)
         return card
 
+    def _set_account_name(self, name: str):
+        cleaned = str(name or '').strip()
+        if cleaned:
+            self._account_name = cleaned
+        display = self._account_name if self._account_name else '—'
+        self._state_badge.setText(f'● {display}')
+
     def _set_badge_state(self, label: str, kind: str = 'stopped'):
+        self._current_state_kind = kind
         color = self._STATE_COLORS.get(kind, TOKENS['text_muted'])
         bg_map = {
             'farming': 'rgba(34, 197, 94, 0.14)',
@@ -198,7 +209,8 @@ class RunPage(QWidget):
         }
         bg = bg_map.get(kind, TOKENS['surface_hi'])
         border = border_map.get(kind, TOKENS['border_hi'])
-        self._state_badge.setText(f'● {label.upper()}')
+        display = self._account_name if self._account_name else '—'
+        self._state_badge.setText(f'● {display}')
         self._state_badge.setStyleSheet(
             f'color: {color}; background-color: {bg}; border: 1px solid {border}; border-radius: 6px; padding: 4px 10px;'
         )
@@ -620,6 +632,9 @@ class RunPage(QWidget):
         return f'{value:,}'
 
     def _on_state_changed(self, payload):
+        account = payload.get('account')
+        if account:
+            self._set_account_name(str(account))
         state = payload.get('state')
         if state:
             s_low = str(state).lower()
@@ -1010,5 +1025,5 @@ class RunPage(QWidget):
     def _on_running_changed(self, running):
         self._btn_start.setEnabled(not running)
         self._btn_stop.setEnabled(running)
-        if not running and self._state_badge.text().endswith(('FARMING', 'RUNNING', 'IDLING')):
+        if not running and self._current_state_kind in ('farming', 'running', 'idling'):
             self._set_badge_state('STOPPED', 'stopped')

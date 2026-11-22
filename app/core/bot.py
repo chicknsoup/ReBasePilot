@@ -285,6 +285,7 @@ class Bot:
                 raise InterruptedError('Bot stopped by user')
     def _refresh_home_resources(self, max_age_s=0.0):
         """Refresh spendable inventory and cap detection; never add raid earnings."""
+        self._update_home_account_name()
         if max_age_s > 0.0:
             cached = getattr(self, '_last_hud_triplet', None)
             cached_ts = getattr(self, '_last_hud_triplet_ts', 0.0)
@@ -753,14 +754,67 @@ deselect, which would eat the upcoming Attack click.'''
             logger.warning('Clan assist pass failed; continuing farm loop', exc_info=True)
             return None
 
-    def _emit_state(self, state=None, builders=None, lab=None, storages=None, note=None, skipped=None, raid_loot=None):
+    @staticmethod
+    def _read_home_account_name(frame):
+        """Read the player's account name from the top-left Home Village HUD."""
+        if frame is None or not getattr(frame, 'size', 0):
+            return None
+        fh, fw = frame.shape[:2]
+        region = (
+            int(round(fw * 0.055)),
+            int(round(fh * 0.008)),
+            max(1, int(round(fw * 0.19))),
+            max(1, int(round(fh * 0.060))),
+        )
+        try:
+            words = VisionService.find_words_ocr(
+                frame,
+                region=region,
+                white_text=True,
+                roi_upscale=3,
+                tesseract_config='--psm 7',
+            ) or []
+        except Exception:
+            return None
+        tokens = [w.text.strip() for w in sorted(words, key=lambda b: b.left) if w.text and w.text.strip()]
+        # Drop a stray XP-level number if it bled in from the left edge
+        while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:
+            tokens.pop(0)
+        name = ' '.join(tokens).strip()
+        # Reject empty, purely numeric, or implausibly noisy reads
+        if len(name) < 2 or len(name) > 24 or name.isdigit():
+            return None
+        alnum_count = sum(1 for ch in name if ch.isalnum())
+        if alnum_count < 2:
+            return None
+        return name
+
+    def _update_home_account_name(self, frame=None):
+        """Best-effort refresh of the active account name when on Home Village."""
+        if frame is None:
+            win = getattr(self, 'window', None)
+            if win is None:
+                return
+            frame = win.screenshot()
+        if frame is None or not getattr(frame, 'size', 0):
+            return
+        name = self._read_home_account_name(frame)
+        if not name:
+            return
+        prev = getattr(self, '_loot_account', None)
+        self._loot_account = name
+        if name != prev:
+            logger.info('Home account detected: %s', name)
+        self._emit_state(account=name)
+
+    def _emit_state(self, state=None, builders=None, lab=None, storages=None, note=None, skipped=None, raid_loot=None, account=None):
         """Push a live-state update to the UI panel (best-effort, never raises)."""
         cb = getattr(self, '_state_callback', None)
         if not cb:
             return
         else:
             try:
-                cb({'state': state, 'builders': builders, 'lab': lab, 'storages': storages, 'note': note, 'skipped': skipped, 'raid_loot': raid_loot})
+                cb({'state': state, 'builders': builders, 'lab': lab, 'storages': storages, 'note': note, 'skipped': skipped, 'raid_loot': raid_loot, 'account': account})
             except Exception:
                 logger.debug('State callback failed', exc_info=True)
     def _read_state_stable(self, attempts = 3):
@@ -2706,6 +2760,7 @@ deselect, which would eat the upcoming Attack click.'''
             if ax or self._detect_village_type(frame) is not None or is_village_hud(frame, self.vision):
                 self._reload_first_seen = None
                 self._finish_unread_raid('home reached without a readable result screen')
+                self._update_home_account_name(frame)
                 return
             if step % 3 == 0:
                 tx, ty = self._match_ui_control(frame, 'chestcontinue.png', region=bot_roi)
@@ -2821,6 +2876,7 @@ deselect, which would eat the upcoming Attack click.'''
                     else:
                         self._finish_unread_raid('account changed before a result could be recorded')
                         self._loot_account = username
+                        self._emit_state(account=username)
                         self._advisor = None
                         self._research_advisor = None
                         self._upgrade_retry_pending = False

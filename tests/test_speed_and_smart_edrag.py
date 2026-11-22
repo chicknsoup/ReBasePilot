@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.2.5')
-        self.assertEqual(format_window_title('', '1.2.5'), 'BaseLooter v1.2.5')
-        self.assertEqual(format_window_title('Main', '1.2.5'), 'BaseLooter v1.2.5 — Main')
+        self.assertEqual(__version__, '1.2.6')
+        self.assertEqual(format_window_title('', '1.2.6'), 'BaseLooter v1.2.6')
+        self.assertEqual(format_window_title('Main', '1.2.6'), 'BaseLooter v1.2.6 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -417,6 +417,38 @@ class TestResilientLogRotation(unittest.TestCase):
             self.assertEqual(len(page._all_lines), 1)
             self.assertIn('fresh after rotate', page._all_lines[0])
             self.assertEqual(page._pos, log_path.stat().st_size)
+
+
+class TestAccountBadgeAndHomeName(unittest.TestCase):
+    def test_read_home_account_name_strips_xp_number_and_rejects_noise(self):
+        from types import SimpleNamespace
+
+        frame = np.zeros((900, 1600, 3), dtype=np.uint8)
+        fake_words = [SimpleNamespace(left=5, text='215'), SimpleNamespace(left=40, text='ChinhNC')]
+        with patch.object(VisionService, 'find_words_ocr', return_value=fake_words):
+            self.assertEqual(Bot._read_home_account_name(frame), 'ChinhNC')
+
+        noise_words = [SimpleNamespace(left=5, text='123')]
+        with patch.object(VisionService, 'find_words_ocr', return_value=noise_words):
+            self.assertIsNone(Bot._read_home_account_name(frame))
+
+    def test_run_page_top_badge_shows_account_name_while_stat_state_shows_bot_state(self):
+        from app.ui.qt.pages.run import RunPage
+
+        page = RunPage.__new__(RunPage)
+        page._account_name = ''
+        page._current_state_kind = 'stopped'
+        page._state_badge = MagicMock()
+        page._stat_state = MagicMock()
+        page._stat_builders = MagicMock()
+        page._stat_lab = MagicMock()
+        page._stat_storages = MagicMock()
+        page._stat_skipped = MagicMock()
+        page._stat_note = MagicMock()
+
+        page._on_state_changed({'account': 'ChinhNC', 'state': 'FARMING'})
+        page._state_badge.setText.assert_called_with('● ChinhNC')
+        page._stat_state.setText.assert_called_with('FARMING')
 
 
 if __name__ == '__main__':
