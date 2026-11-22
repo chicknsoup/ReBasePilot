@@ -1314,7 +1314,9 @@ deselect, which would eat the upcoming Attack click.'''
                 scrolls += 1
                 if scrolls >= _WALL_MENU_SCROLL_STEPS:
                     break
-                self.input.scroll(*self._wall_menu_scroll_point(), _WALL_MENU_WHEEL_CLICKS, list_scroll=True)
+                # Wall rows always sit near the bottom of the builder list — jump faster on early scrolls
+                clicks = _WALL_MENU_WHEEL_CLICKS * 3 if scrolls <= 2 else _WALL_MENU_WHEEL_CLICKS
+                self.input.scroll(*self._wall_menu_scroll_point(), clicks, list_scroll=True)
                 if self.stop_event.wait(0.5):
                     return
         if not wall_pt:
@@ -1331,9 +1333,9 @@ deselect, which would eat the upcoming Attack click.'''
                 return
             self._update_config_size(frame)
             fh, fw = frame.shape[:2]
-            bar_roi = (int(fw * 0.18), int(fh * 0.72), int(fw * 0.62), int(fh * 0.25))
-            umx, umy = self.vision.find_template(frame, 'upgrademore.png', threshold=0.72, region=bar_roi)
-            if not umx and poll_idx == 5:
+            bar_roi = (int(fw * 0.16), int(fh * 0.56), int(fw * 0.62), int(fh * 0.42))
+            umx, umy = self.vision.find_template(frame, 'upgrademore.png', threshold=0.66, region=bar_roi)
+            if not umx and poll_idx in (2, 5):
                 umx, umy = find_ui_label(frame, self.vision, ('Upgrade More', 'More'), region=bar_roi, min_confidence=50)
             if umx:
                 break

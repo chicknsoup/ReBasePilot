@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.4.3')
-        self.assertEqual(format_window_title('', '1.4.3'), 'BaseLooter v1.4.3')
-        self.assertEqual(format_window_title('Main', '1.4.3'), 'BaseLooter v1.4.3 — Main')
+        self.assertEqual(__version__, '1.4.4')
+        self.assertEqual(format_window_title('', '1.4.4'), 'BaseLooter v1.4.4')
+        self.assertEqual(format_window_title('Main', '1.4.4'), 'BaseLooter v1.4.4 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -615,6 +615,30 @@ class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
         ):
             bot._update_home_account_name(dummy)
         self.assertEqual(bot._loot_account, 'Soup')
+
+    def test_wall_upgrade_more_found_in_two_row_action_bar(self):
+        wall_frame = pathlib.Path(r'C:\Users\chinhnc\AppData\Local\BaseLooter\debug\wallrow_1795343138.jpg')
+        if not wall_frame.exists():
+            return
+        fr = cv2.imread(str(wall_frame))
+        self.assertIsNotNone(fr)
+        fh, fw = fr.shape[:2]
+        bar_roi = (int(fw * 0.16), int(fh * 0.56), int(fw * 0.62), int(fh * 0.42))
+        prev_scale = VisionService._active_ui_scale
+        prev_size = VisionService._ui_scale_calibrated_size
+        try:
+            VisionService._active_ui_scale = 1.22
+            VisionService._ui_scale_calibrated_size = (fw, fh)
+            v = VisionService()
+            umx, umy = v.find_template(fr, 'upgrademore.png', threshold=0.66, region=bar_roi)
+            self.assertIsNotNone(umx, 'upgrademore.png must match in widened two-row bar_roi')
+            self.assertGreater(umx, 650)
+            self.assertLess(umx, 860)
+            self.assertGreater(umy, 560)
+            self.assertLess(umy, 720)
+        finally:
+            VisionService._active_ui_scale = prev_scale
+            VisionService._ui_scale_calibrated_size = prev_size
 
 
 if __name__ == '__main__':
