@@ -42,6 +42,14 @@ logger = setup_logger('Main')
 def main():
     try:
         try:
+            import ctypes as _ct
+            _k32 = _ct.windll.kernel32
+            _k32.GetCurrentProcess.restype = _ct.c_void_p
+            # BELOW_NORMAL_PRIORITY_CLASS (0x4000) keeps desktop/browser/emulator completely smooth
+            _k32.SetPriorityClass(_k32.GetCurrentProcess(), 0x00004000)
+        except Exception:
+            pass
+        try:
             import cv2
             cv2.setNumThreads(2)
         except Exception:

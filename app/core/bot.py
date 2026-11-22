@@ -1391,7 +1391,7 @@ deselect, which would eat the upcoming Attack click.'''
         logger.info('Wall upgrade: upgrading 1 wall (single-wall mode)')
         self._upgrade_walls_pick_resource_and_okay()
         return True
-    def _find_reload_button(self, frame):
+    def _find_reload_button(self, frame, *, force=False):
         """Return ``(kind, x, y)`` when a reload dialog is visible, or ``(None, None, None)``.
         ``reload_game.png`` is the Google Play Games inactivity dialog ('Anyone there? You have
         been disconnected due to inactivity. RELOAD GAME') and ``try_again.png`` is the server
@@ -1399,16 +1399,22 @@ deselect, which would eat the upcoming Attack click.'''
         ``reload.png`` is the legacy connection-lost / another-device button."""
         if frame is None or getattr(frame, 'size', 0) == 0:
             return (None, None, None)
+        now = time.monotonic()
+        if not force and (now - getattr(self, '_last_reload_check_ts', 0.0)) < 2.5:
+            return (None, None, None)
+        self._last_reload_check_ts = now
+        fh, fw = frame.shape[:2]
+        modal_roi = (int(fw * 0.22), int(fh * 0.28), int(fw * 0.56), int(fh * 0.54))
         if get_template_path('reload_game.png').exists():
-            lx, ly = self.vision.find_template(frame, 'reload_game.png')
+            lx, ly = self.vision.find_template(frame, 'reload_game.png', region=modal_roi)
             if lx:
                 return ('inactivity', lx, ly)
         if get_template_path('try_again.png').exists():
-            lx, ly = self.vision.find_template(frame, 'try_again.png')
+            lx, ly = self.vision.find_template(frame, 'try_again.png', region=modal_roi)
             if lx:
                 return ('try_again', lx, ly)
         if get_template_path('reload.png').exists():
-            lx, ly = self.vision.find_template(frame, 'reload.png')
+            lx, ly = self.vision.find_template(frame, 'reload.png', region=modal_roi)
             if lx:
                 return ('connection', lx, ly)
         return (None, None, None)
@@ -3440,7 +3446,7 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
                 if x:
                     return (x, y)
             # pass 2: navigation-label OCR fallback only periodically after initial cloud polls
-            if poll_idx >= 3 and poll_idx % 3 == 0:
+            if poll_idx >= 4 and poll_idx % 4 == 0:
                 for template in templates:
                     x, y = self._match_ui_control(frame, template, threshold=threshold, region=regions[template])
                     if x:
@@ -3460,10 +3466,14 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
         taps Reload, and lets the caller's next poll re-anchor on the fresh home."""
         start = time.time()
         reload_warned = 0
+        poll_idx = 0
         while time.time() - start < timeout:
             self._check_stop()
             frame = self.window.screenshot()
             if frame is None:
+                if self.stop_event.wait(0.3):
+                    self._check_stop()
+                    return (None, None)
                 continue
             self._update_config_size(frame)
             if self._battle_rewards.handle(frame):
@@ -3483,9 +3493,12 @@ OCR is limited to the right half of the window unless ``region`` is passed expli
                 start = time.time()
                 continue
             search_region = self._search_region_for_template(frame, template, region, y_anchor, y_slop)
-            x, y = self._match_ui_control(frame, template, threshold=threshold, region=search_region)
+            x, y = self.vision.find_template(frame, template, threshold=threshold, region=search_region)
+            if not x and poll_idx >= 3 and poll_idx % 4 == 0:
+                x, y = self._match_ui_control(frame, template, threshold=threshold, region=search_region)
             if x:
                 return (x, y)
+            poll_idx += 1
             if self.stop_event.wait(0.5):
                 self._check_stop()
                 return (None, None)

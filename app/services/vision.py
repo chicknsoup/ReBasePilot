@@ -126,6 +126,10 @@ try:
             'farmbattle.png',
             'rankedbattle.png',
             'attack2.png',
+            'reload_game.png',
+            'try_again.png',
+            'reload.png',
+            'okay.png',
         })
         @staticmethod
         def _resize_template_for_screen(template, screen_img):
