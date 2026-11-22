@@ -769,7 +769,7 @@ deselect, which would eat the upcoming Attack click.'''
         x0 = max(0, int(round(fw * 0.072 * ui_s)))
         y0 = max(0, int(round(fh * 0.022 * ui_s)))
         x1 = min(fw, int(round(fw * 0.24 * ui_s)))
-        y1 = min(fh, int(round(fh * 0.082 * ui_s)))
+        y1 = min(fh, int(round(fh * 0.100 * ui_s)))
         if x1 <= x0 or y1 <= y0:
             return None
 
@@ -784,8 +784,9 @@ deselect, which would eat the upcoming Attack click.'''
                         white_text=True,
                     )
                     if n_words:
-                        min_top = min(w.top for w in n_words)
-                        line_tol = max(10, int(round((y1 - y0) * 0.38)))
+                        top_word = min(n_words, key=lambda w: w.top)
+                        min_top = top_word.top
+                        line_tol = max(8, int(round(top_word.height * 0.6)))
                         top_line = [w for w in n_words if abs(w.top - min_top) <= line_tol]
                         tokens = [w.text.strip() for w in sorted(top_line, key=lambda b: b.left) if w.text and w.text.strip()]
                         while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:

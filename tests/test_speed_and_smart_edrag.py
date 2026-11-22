@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.4.0')
-        self.assertEqual(format_window_title('', '1.4.0'), 'BaseLooter v1.4.0')
-        self.assertEqual(format_window_title('Main', '1.4.0'), 'BaseLooter v1.4.0 — Main')
+        self.assertEqual(__version__, '1.4.1')
+        self.assertEqual(format_window_title('', '1.4.1'), 'BaseLooter v1.4.1')
+        self.assertEqual(format_window_title('Main', '1.4.1'), 'BaseLooter v1.4.1 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -569,7 +569,17 @@ class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
             canvas = np.zeros((900, 1600, 3), dtype=np.uint8)
             ch, cw = crop.shape[:2]
             canvas[:ch, :cw] = crop
-            self.assertEqual(Bot._read_home_account_name(canvas), 'Soup')
+            prev_scale = VisionService._active_ui_scale
+            try:
+                VisionService._active_ui_scale = 1.0
+                self.assertEqual(Bot._read_home_account_name(canvas), 'Soup')
+                # Live MuMu 1.22x placement: account name sits around y=72..102, clan row below at y=102..127
+                canvas_122 = np.zeros((900, 1600, 3), dtype=np.uint8)
+                canvas_122[30:30 + ch, 40:40 + cw] = crop
+                VisionService._active_ui_scale = 1.22
+                self.assertEqual(Bot._read_home_account_name(canvas_122), 'Soup')
+            finally:
+                VisionService._active_ui_scale = prev_scale
 
         if REAL_FRAME_1600.exists():
             frame = cv2.imread(str(REAL_FRAME_1600))
