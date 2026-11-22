@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.3.2')
-        self.assertEqual(format_window_title('', '1.3.2'), 'BaseLooter v1.3.2')
-        self.assertEqual(format_window_title('Main', '1.3.2'), 'BaseLooter v1.3.2 — Main')
+        self.assertEqual(__version__, '1.3.3')
+        self.assertEqual(format_window_title('', '1.3.3'), 'BaseLooter v1.3.3')
+        self.assertEqual(format_window_title('Main', '1.3.3'), 'BaseLooter v1.3.3 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -502,6 +502,33 @@ class TestAccountBadgeAndHomeName(unittest.TestCase):
         rx, ry = v.find_template(frame, 'returnhome.png', region=VisionService.bottom_half_region(frame))
         self.assertIsNotNone(rx)
         self.assertAlmostEqual(VisionService._active_ui_scale, 1.22, places=2)
+
+    def test_startup_panel_x_at_1x_does_not_lock_calibration_before_attack_122x(self):
+        # Fresh startup: uncalibrated, panel_x.png appears first at 1.0x -> must NOT lock calibration to 1.0x
+        VisionService._active_ui_scale = 1.0
+        VisionService._ui_scale_calibrated_size = None
+        px_tpl = cv2.imread(str(pathlib.Path(r'F:\ReBasePilot\templates\16_9\panel_x.png')))
+        atk_tpl = cv2.imread(str(pathlib.Path(r'F:\ReBasePilot\templates\16_9\attack.png')))
+        self.assertIsNotNone(px_tpl)
+        self.assertIsNotNone(atk_tpl)
+        sx, sy = 1600.0 / 2560.0, 900.0 / 1440.0
+
+        # 1) panel_x at 1.0x matches cleanly but leaves calibration open
+        px_1x = cv2.resize(px_tpl, (int(round(px_tpl.shape[1] * sx)), int(round(px_tpl.shape[0] * sy))))
+        f_popup = np.zeros((900, 1600, 3), dtype=np.uint8)
+        f_popup[15:15 + px_1x.shape[0], 1540:1540 + px_1x.shape[1]] = px_1x
+        v = VisionService()
+        x, y = v.find_template(f_popup, 'panel_x.png')
+        self.assertIsNotNone(x)
+        self.assertIsNone(VisionService._ui_scale_calibrated_size)
+
+        # 2) Then Home screen attack.png at 1.22x calibrates global scale to 1.22x
+        atk_122 = cv2.resize(atk_tpl, (int(round(atk_tpl.shape[1] * sx * 1.22)), int(round(atk_tpl.shape[0] * sy * 1.22))))
+        f_home = np.zeros((900, 1600, 3), dtype=np.uint8)
+        f_home[720:720 + atk_122.shape[0], 40:40 + atk_122.shape[1]] = atk_122
+        ax, ay = v.find_template(f_home, 'attack.png', region=VisionService.bottom_half_region(f_home))
+        self.assertIsNotNone(ax)
+        self.assertAlmostEqual(VisionService._active_ui_scale, 1.22, delta=0.05)
 
 
 if __name__ == '__main__':

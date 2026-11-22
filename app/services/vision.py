@@ -181,13 +181,14 @@ try:
                 return (best_cand, best_val, best_f)
 
             (best_tpl, best_score, best_factor) = _eval_factors(primary_factors)
+            is_anchor = template_name in VisionService._UI_SCALE_ANCHOR_TEMPLATES
             if best_score >= 0.78:
-                if need_calibration and template_name not in VisionService._LOCAL_MULTISCALE_TEMPLATES and best_score >= 0.85 and min(t_h, t_w) >= 20:
+                if need_calibration and is_anchor and best_score >= 0.85 and min(t_h, t_w) >= 20:
                     VisionService._active_ui_scale = float(best_factor)
                     VisionService._ui_scale_calibrated_size = (w_scr, h_scr)
                 return best_tpl
 
-            if need_calibration and template_name not in VisionService._LOCAL_MULTISCALE_TEMPLATES:
+            if need_calibration and is_anchor:
                 extra = [f for f in VisionService._UI_DPI_SCALE_CANDIDATES if all(abs(f - pf) > 0.01 for pf in primary_factors)]
                 if extra:
                     (cand_tpl, cand_score, cand_factor) = _eval_factors(extra)
