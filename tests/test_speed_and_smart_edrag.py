@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.2.6')
-        self.assertEqual(format_window_title('', '1.2.6'), 'BaseLooter v1.2.6')
-        self.assertEqual(format_window_title('Main', '1.2.6'), 'BaseLooter v1.2.6 — Main')
+        self.assertEqual(__version__, '1.2.7')
+        self.assertEqual(format_window_title('', '1.2.7'), 'BaseLooter v1.2.7')
+        self.assertEqual(format_window_title('Main', '1.2.7'), 'BaseLooter v1.2.7 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -424,13 +424,37 @@ class TestAccountBadgeAndHomeName(unittest.TestCase):
         from types import SimpleNamespace
 
         frame = np.zeros((900, 1600, 3), dtype=np.uint8)
-        fake_words = [SimpleNamespace(left=5, text='215'), SimpleNamespace(left=40, text='ChinhNC')]
+        fake_words = [
+            SimpleNamespace(left=5, top=10, text='215'),
+            SimpleNamespace(left=40, top=12, text='ChinhNC'),
+            SimpleNamespace(left=40, top=58, text='SubClanLabel'),
+        ]
         with patch.object(VisionService, 'find_words_ocr', return_value=fake_words):
             self.assertEqual(Bot._read_home_account_name(frame), 'ChinhNC')
 
-        noise_words = [SimpleNamespace(left=5, text='123')]
+        noise_words = [SimpleNamespace(left=5, top=10, text='123')]
         with patch.object(VisionService, 'find_words_ocr', return_value=noise_words):
             self.assertIsNone(Bot._read_home_account_name(frame))
+
+    def test_read_base_loot_respects_time_budget_so_scout_timer_does_not_expire(self):
+        bot = Bot.__new__(Bot)
+        bot.stop_event = threading.Event()
+        bot.window = MagicMock()
+        bot.window.screenshot.return_value = np.zeros((900, 1600, 3), dtype=np.uint8)
+        bot._update_config_size = MagicMock()
+        clock = {'t': 10.0}
+
+        def slow_read(_fr):
+            clock['t'] += 9.0
+            return (1_352_866, 853_404, 5000)
+
+        with (
+            patch('app.core.bot.time.monotonic', side_effect=lambda: clock['t']),
+            patch('app.core.bot.read_enemy_loot', side_effect=slow_read) as mock_read,
+        ):
+            loot = bot._read_base_loot(polls=6, samples=3, max_seconds=8.0)
+        self.assertEqual(loot, (1_352_866, 853_404, 5000))
+        self.assertEqual(mock_read.call_count, 1)
 
     def test_run_page_top_badge_shows_account_name_while_stat_state_shows_bot_state(self):
         from app.ui.qt.pages.run import RunPage

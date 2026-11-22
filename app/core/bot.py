@@ -760,23 +760,33 @@ deselect, which would eat the upcoming Attack click.'''
         if frame is None or not getattr(frame, 'size', 0):
             return None
         fh, fw = frame.shape[:2]
-        region = (
-            int(round(fw * 0.055)),
-            int(round(fh * 0.008)),
-            max(1, int(round(fw * 0.19))),
-            max(1, int(round(fh * 0.060))),
-        )
-        try:
-            words = VisionService.find_words_ocr(
-                frame,
-                region=region,
-                white_text=True,
-                roi_upscale=3,
-                tesseract_config='--psm 7',
-            ) or []
-        except Exception:
+        ui_s = max(1.0, min(1.45, float(getattr(VisionService, '_active_ui_scale', 1.0))))
+        x0 = max(0, int(round(fw * 0.048 * ui_s)))
+        y0 = max(0, int(round(fh * 0.006)))
+        rw = max(1, min(fw - x0, int(round(fw * 0.22 * ui_s))))
+        rh = max(1, min(fh - y0, int(round(fh * 0.072 * ui_s))))
+        region = (x0, y0, rw, rh)
+        words = []
+        for psm in ('--psm 6', '--psm 7'):
+            try:
+                words = VisionService.find_words_ocr(
+                    frame,
+                    region=region,
+                    white_text=True,
+                    roi_upscale=3,
+                    tesseract_config=psm,
+                ) or []
+            except Exception:
+                words = []
+            if words:
+                break
+        if not words:
             return None
-        tokens = [w.text.strip() for w in sorted(words, key=lambda b: b.left) if w.text and w.text.strip()]
+        # Keep only the top-most text line (player name sits above any sub-label)
+        min_top = min(getattr(w, 'top', 0) for w in words)
+        line_tol = max(10, int(round(rh * 0.38)))
+        top_line = [w for w in words if abs(getattr(w, 'top', 0) - min_top) <= line_tol]
+        tokens = [w.text.strip() for w in sorted(top_line, key=lambda b: b.left) if w.text and w.text.strip()]
         # Drop a stray XP-level number if it bled in from the left edge
         while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:
             tokens.pop(0)
@@ -2244,15 +2254,16 @@ deselect, which would eat the upcoming Attack click.'''
             self._check_stop()
             return 'failed'
         return 'loaded'
-    def _read_base_loot(self, polls=_LOOT_READ_POLLS, samples=_LOOT_READ_SAMPLES):
+    def _read_base_loot(self, polls=_LOOT_READ_POLLS, samples=_LOOT_READ_SAMPLES, max_seconds=8.0):
         """Read the enemy loot panel and fold several reads into one.
 
         Stops early as soon as two consecutive reads agree identically (typical
-        with the fast glyph reader), and otherwise gathers up to ``samples``
-        reads before taking the per-resource max.
+        with the fast glyph reader), or once ``max_seconds`` has elapsed with at
+        least one usable read so slow OCR never burns through the 30s scout timer.
         """
         self._last_loot_read_agreed = False
         reads = []
+        deadline = time.monotonic() + float(max_seconds)
         for _ in range(max(1, int(polls))):
             frame = self.window.screenshot()
             if frame is not None:
@@ -2265,6 +2276,10 @@ deselect, which would eat the upcoming Attack click.'''
                         break
                     if len(reads) >= max(1, int(samples)):
                         break
+                    if time.monotonic() >= deadline:
+                        break
+            if time.monotonic() >= deadline and reads:
+                break
             if self.stop_event.wait(0.15):
                 break
         return combine_reads(reads)

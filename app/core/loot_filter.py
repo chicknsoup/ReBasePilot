@@ -184,8 +184,8 @@ def _read_enemy_loot_fast(frame):
         min_digits=4,
         value_floor=_NOISE_VALUE_FLOOR,
         skip_header_frac=0.0,
-        min_score=0.84,
-        min_margin=0.012,
+        min_score=0.83,
+        min_margin=0.010,
     )
 
 
