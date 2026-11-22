@@ -777,14 +777,26 @@ deselect, which would eat the upcoming Attack click.'''
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         # Preserve the light-silver lower gradient of Clash's font (V~185-215) so 'o'/'u' bowls stay closed
         white = cv2.inRange(hsv, (0, 0, 185), (180, 55, 255))
-        _n, _lbl, stats, _cen = cv2.connectedComponentsWithStats(white)
+        v_chan = hsv[:, :, 2]
+        n_cc, labels, stats, _cen = cv2.connectedComponentsWithStats(white)
         min_h = max(9, int(round(fh * 0.011)))
         max_h = max(24, int(round(fh * 0.036)))
-        cands = [
-            tuple(map(int, b[:4]))
-            for b in stats[1:]
-            if b[4] >= 10 and min_h <= b[3] <= max_h and b[2] <= max_h * 2.2
-        ]
+        ring_kernel = np.ones((7, 7), np.uint8)
+        cands = []
+        for idx in range(1, n_cc):
+            bx, by, bw, bh, area = map(int, stats[idx][:5])
+            if area < 10 or not (min_h <= bh <= max_h) or bw > max_h * 2.2:
+                continue
+            # Clash HUD text always has a dark black outline around white glyphs; bright snow/water scenery does not
+            sy0, sy1 = max(0, by - 3), min(white.shape[0], by + bh + 3)
+            sx0, sx1 = max(0, bx - 3), min(white.shape[1], bx + bw + 3)
+            comp_mask = (labels[sy0:sy1, sx0:sx1] == idx).astype(np.uint8)
+            ring = (cv2.dilate(comp_mask, ring_kernel) > 0) & (comp_mask == 0)
+            if not ring.any():
+                continue
+            dark_ratio = float((v_chan[sy0:sy1, sx0:sx1][ring] <= 45).mean())
+            if dark_ratio >= 0.16:
+                cands.append((bx, by, bw, bh, idx))
         if cands:
             lines = []
             for box in sorted(cands, key=lambda b: b[1] + b[3] * 0.5):
@@ -812,7 +824,9 @@ deselect, which would eat the upcoming Attack click.'''
                 by0 = max(0, min(b[1] for b in kept) - 4)
                 bx1 = min(white.shape[1], max(b[0] + b[2] for b in kept) + 4)
                 by1 = min(white.shape[0], max(b[1] + b[3] for b in kept) + 4)
-                inv = cv2.bitwise_not(white[by0:by1, bx0:bx1])
+                kept_ids = {b[4] for b in kept}
+                clean_sub = np.isin(labels[by0:by1, bx0:bx1], list(kept_ids)).astype(np.uint8) * 255
+                inv = cv2.bitwise_not(clean_sub)
                 padded = cv2.copyMakeBorder(inv, 12, 12, 12, 12, cv2.BORDER_CONSTANT, value=255)
                 up = cv2.resize(padded, (padded.shape[1] * 3, padded.shape[0] * 3), interpolation=cv2.INTER_LINEAR)
                 up_bgr = cv2.cvtColor(up, cv2.COLOR_GRAY2BGR)

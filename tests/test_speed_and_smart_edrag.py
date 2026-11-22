@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.2.11')
-        self.assertEqual(format_window_title('', '1.2.11'), 'BaseLooter v1.2.11')
-        self.assertEqual(format_window_title('Main', '1.2.11'), 'BaseLooter v1.2.11 — Main')
+        self.assertEqual(__version__, '1.2.12')
+        self.assertEqual(format_window_title('', '1.2.12'), 'BaseLooter v1.2.12')
+        self.assertEqual(format_window_title('Main', '1.2.12'), 'BaseLooter v1.2.12 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -473,6 +473,19 @@ class TestAccountBadgeAndHomeName(unittest.TestCase):
         page._on_state_changed({'account': 'ChinhNC', 'state': 'FARMING'})
         page._state_badge.setText.assert_called_with('● ChinhNC')
         page._stat_state.setText.assert_called_with('FARMING')
+
+    def test_outline_filter_ignores_bright_snow_scenery_blobs(self):
+        # Bright snow scenery full of white blobs WITHOUT black outlines must not trigger glyph OCR
+        snow = np.full((900, 1600, 3), (235, 240, 245), dtype=np.uint8)
+        for x in range(150, 320, 24):
+            cv2.rectangle(snow, (x, 45), (x + 14, 65), (255, 255, 255), -1)
+        VisionService._active_ui_scale = 1.22
+        with patch.object(VisionService, 'find_words_ocr', return_value=[]) as mock_ocr:
+            res = Bot._read_home_account_name(snow)
+        self.assertIsNone(res)
+        # No outlined glyphs passed -> must not call preprocess=False clean OCR path
+        for call in mock_ocr.call_args_list:
+            self.assertNotEqual(call.kwargs.get('preprocess'), False)
 
 
 if __name__ == '__main__':
