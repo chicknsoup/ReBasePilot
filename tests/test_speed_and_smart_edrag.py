@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.2.4')
-        self.assertEqual(format_window_title('', '1.2.4'), 'BaseLooter v1.2.4')
-        self.assertEqual(format_window_title('Main', '1.2.4'), 'BaseLooter v1.2.4 — Main')
+        self.assertEqual(__version__, '1.2.5')
+        self.assertEqual(format_window_title('', '1.2.5'), 'BaseLooter v1.2.5')
+        self.assertEqual(format_window_title('Main', '1.2.5'), 'BaseLooter v1.2.5 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -332,6 +332,91 @@ class TestChestTapOpenFlow(unittest.TestCase):
         cx, cy = bot.input.click.call_args[0][:2]
         self.assertTrue(410 <= cx <= 590)
         self.assertTrue(460 <= cy <= 530)
+
+
+class TestResilientLogRotation(unittest.TestCase):
+    def test_multiple_loggers_share_handler_and_rotate_cleanly_on_windows(self):
+        import logging
+        import tempfile
+        from app.utils.logger import _FILE_HANDLERS, _SafeRotatingFileHandler, setup_logger
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = pathlib.Path(tmp) / 'test_rotate.log'
+            a = setup_logger('TestRotA_125', log_file=str(log_path))
+            b = setup_logger('TestRotB_125', log_file=str(log_path))
+            fh_a = next(h for h in a.handlers if isinstance(h, _SafeRotatingFileHandler))
+            fh_b = next(h for h in b.handlers if isinstance(h, _SafeRotatingFileHandler))
+            self.assertIs(fh_a, fh_b)
+
+            # Force small maxBytes to trigger rollover across both loggers
+            fh_a.maxBytes = 200
+            for i in range(10):
+                a.info('Logger A line %d %s', i, 'x' * 40)
+                b.info('Logger B line %d %s', i, 'y' * 40)
+            fh_a.flush()
+
+            backup = pathlib.Path(tmp) / 'test_rotate.log.1'
+            self.assertTrue(backup.exists(), 'Expected rotated backup .1 to be created cleanly')
+            content = log_path.read_text(encoding='utf-8')
+            self.assertIn('Logger B line 9', content)
+
+            # Clean up shared handler cache & loggers so temp dir can be deleted on Windows
+            for lg in (a, b):
+                lg.handlers.clear()
+            fh_a.close()
+            for k in list(_FILE_HANDLERS.keys()):
+                if _FILE_HANDLERS[k] is fh_a:
+                    del _FILE_HANDLERS[k]
+
+    def test_rollover_permission_error_reopens_stream_and_keeps_logging(self):
+        import logging
+        import tempfile
+        from app.utils.logger import _SafeRotatingFileHandler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = pathlib.Path(tmp) / 'locked.log'
+            handler = _SafeRotatingFileHandler(str(log_path), mode='a', encoding='utf-8', maxBytes=80, backupCount=2)
+            lg = logging.getLogger('TestLockedRot_125')
+            lg.setLevel(logging.INFO)
+            lg.handlers.clear()
+            lg.addHandler(handler)
+            try:
+                with patch.object(handler, 'rotate', side_effect=PermissionError('WinError 32 simulated')):
+                    lg.info('first line %s', 'a' * 60)
+                    lg.info('after failed rollover line')
+                handler.flush()
+                text = log_path.read_text(encoding='utf-8')
+                self.assertIn('after failed rollover line', text)
+            finally:
+                lg.handlers.clear()
+                handler.close()
+
+    def test_logs_page_tail_resets_position_after_rotation(self):
+        import tempfile
+        from app.ui.qt.pages.logs import LogsPage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = pathlib.Path(tmp) / 'tail.log'
+            log_path.write_text('2026-11-22 08:30:00 - BotCore - INFO - fresh after rotate\n', encoding='utf-8')
+
+            page = LogsPage.__new__(LogsPage)
+            page._pos = 5_242_880  # old offset before 5 MB rotation
+            page._all_lines = []
+            page._active_category = 'all'
+            page._search_query = ''
+            page._log_view = MagicMock()
+            page._log_view.document.return_value.characterCount.return_value = 1
+            page._log_view.document.return_value.blockCount.return_value = 1
+            page._auto_scroll_toggle = MagicMock()
+            page._auto_scroll_toggle.isChecked.return_value = True
+            page._line_count_label = MagicMock()
+
+            with patch('app.ui.qt.pages.logs.get_autoloot_log_path', return_value=log_path):
+                page._tail_log()
+
+            self.assertEqual(len(page._all_lines), 1)
+            self.assertIn('fresh after rotate', page._all_lines[0])
+            self.assertEqual(page._pos, log_path.stat().st_size)
 
 
 if __name__ == '__main__':

@@ -240,6 +240,11 @@ class LogsPage(QWidget):
             path.parent.mkdir(parents=True, exist_ok=True)
             if not path.is_file():
                 path.touch()
+            size = path.stat().st_size
+            if size < self._pos:
+                self._pos = 0
+            if size == self._pos:
+                return
             with path.open('rb') as fh:
                 fh.seek(self._pos)
                 chunk = fh.read()
