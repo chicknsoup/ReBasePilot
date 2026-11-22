@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.4.6')
-        self.assertEqual(format_window_title('', '1.4.6'), 'BaseLooter v1.4.6')
-        self.assertEqual(format_window_title('Main', '1.4.6'), 'BaseLooter v1.4.6 — Main')
+        self.assertEqual(__version__, '1.4.7')
+        self.assertEqual(format_window_title('', '1.4.7'), 'BaseLooter v1.4.7')
+        self.assertEqual(format_window_title('Main', '1.4.7'), 'BaseLooter v1.4.7 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -655,6 +655,17 @@ class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
         self.assertTrue(ok)
         mock_ocr.assert_called_once()
         bot.input.click.assert_called_once_with(920, 560, pause=0.3, rand=False)
+
+    def test_neural_ocr_unload_if_idle_and_lazy_reload(self):
+        from app.services.neural_ocr import NeuralOcrService
+
+        self.assertTrue(NeuralOcrService.is_available())
+        # Not idle yet with 60s threshold -> stays loaded
+        self.assertFalse(NeuralOcrService.unload_if_idle(idle_seconds=60.0))
+        # Force immediate unload (0s) -> unloads cleanly, then reloads on demand
+        self.assertTrue(NeuralOcrService.unload_if_idle(idle_seconds=0.0))
+        self.assertFalse(NeuralOcrService.unload_if_idle(idle_seconds=0.0))
+        self.assertTrue(NeuralOcrService.is_available())
 
 
 if __name__ == '__main__':

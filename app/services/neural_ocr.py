@@ -5,9 +5,11 @@ zero extra dependencies). Models are loaded lazily on first use from ``assets/oc
 """
 from __future__ import annotations
 
+import gc
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -22,6 +24,7 @@ logger = setup_logger('NeuralOCR')
 _LOCK = threading.Lock()
 _ENGINE: Optional['_NeuralEngine'] = None
 _ENGINE_INIT_ATTEMPTED = False
+_LAST_USED_TS: float = 0.0
 
 
 def _locate_model_files() -> Optional[Tuple[Path, Path, Path]]:
@@ -220,11 +223,13 @@ class NeuralOcrService:
 
     @staticmethod
     def _get_engine() -> Optional[_NeuralEngine]:
-        global _ENGINE, _ENGINE_INIT_ATTEMPTED
+        global _ENGINE, _ENGINE_INIT_ATTEMPTED, _LAST_USED_TS
         if _ENGINE is not None:
+            _LAST_USED_TS = time.monotonic()
             return _ENGINE
         with _LOCK:
             if _ENGINE is not None:
+                _LAST_USED_TS = time.monotonic()
                 return _ENGINE
             if _ENGINE_INIT_ATTEMPTED:
                 return None
@@ -235,10 +240,31 @@ class NeuralOcrService:
                 return None
             try:
                 _ENGINE = _NeuralEngine(*paths)
+                _LAST_USED_TS = time.monotonic()
             except Exception:
                 logger.warning('Failed to initialize Neural OCR engine', exc_info=True)
                 _ENGINE = None
             return _ENGINE
+
+    @staticmethod
+    def unload_if_idle(idle_seconds: float = 45.0) -> bool:
+        """Release ONNX sessions when idle to keep long-running RAM low; reloads lazily on next use."""
+        global _ENGINE, _ENGINE_INIT_ATTEMPTED, _LAST_USED_TS
+        if _ENGINE is None:
+            return False
+        if idle_seconds > 0.0 and (time.monotonic() - _LAST_USED_TS) < idle_seconds:
+            return False
+        with _LOCK:
+            if _ENGINE is None:
+                return False
+            if idle_seconds > 0.0 and (time.monotonic() - _LAST_USED_TS) < idle_seconds:
+                return False
+            _ENGINE = None
+            _ENGINE_INIT_ATTEMPTED = False
+            _LAST_USED_TS = 0.0
+        gc.collect()
+        logger.debug('Neural OCR unloaded after idle period to reclaim RAM')
+        return True
 
     @staticmethod
     def is_available() -> bool:

@@ -7,6 +7,13 @@
 from __future__ import annotations
 import os
 import sys
+
+# Must be set before importing numpy/cv2 so OpenBLAS does not reserve ~230 MB of per-core buffers.
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('NUMEXPR_NUM_THREADS', '1')
+
 from multiprocessing import freeze_support
 _root = os.path.dirname(os.path.abspath(__file__))
 if _root not in sys.path:
@@ -34,6 +41,11 @@ from app.utils.tesseract_env import configure_tesseract
 logger = setup_logger('Main')
 def main():
     try:
+        try:
+            import cv2
+            cv2.setNumThreads(2)
+        except Exception:
+            pass
         configure_tesseract()
         try:
             from app.services.display import DisplayService

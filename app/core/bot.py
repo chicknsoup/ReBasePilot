@@ -281,8 +281,21 @@ class Bot:
             reason = 'result read interrupted' if interrupted else 'battle result'
             if ledger.finish(amounts, bonus=bonus, reason=reason):
                 self._emit_loot_update()
+            try:
+                from app.services.neural_ocr import NeuralOcrService
+                NeuralOcrService.unload_if_idle(45.0)
+            except Exception:
+                pass
             import gc
             gc.collect()
+            try:
+                import ctypes as _ct
+                _k32 = _ct.windll.kernel32
+                _k32.GetCurrentProcess.restype = _ct.c_void_p
+                _k32.SetProcessWorkingSetSize.argtypes = [_ct.c_void_p, _ct.c_size_t, _ct.c_size_t]
+                _k32.SetProcessWorkingSetSize(_k32.GetCurrentProcess(), _ct.c_size_t(-1), _ct.c_size_t(-1))
+            except Exception:
+                pass
             if interrupted:
                 raise InterruptedError('Bot stopped by user')
     def _refresh_home_resources(self, max_age_s=0.0):
