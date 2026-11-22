@@ -6,6 +6,7 @@ zero extra dependencies). Models are loaded lazily on first use from ``assets/oc
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -46,7 +47,16 @@ class _OnnxRunner:
         try:
             import onnxruntime as ort  # type: ignore
 
-            sess = ort.InferenceSession(str(model_path), providers=['CPUExecutionProvider'])
+            opts = ort.SessionOptions()
+            # Prevent ORT's greedy power-of-2 CPU memory arena from hoarding hundreds of MB across variable ROI sizes
+            opts.enable_cpu_mem_arena = False
+            opts.enable_mem_pattern = False
+            opts.intra_op_num_threads = min(4, max(2, (os.cpu_count() or 4) // 2))
+            opts.inter_op_num_threads = 1
+            # Disable thread busy-spinning so idle/between-raid CPU stays near 0%
+            opts.add_session_config_entry('session.intra_op.allow_spinning', '0')
+            opts.add_session_config_entry('session.inter_op.allow_spinning', '0')
+            sess = ort.InferenceSession(str(model_path), sess_options=opts, providers=['CPUExecutionProvider'])
             self._ort_session = sess
             self._ort_input_name = sess.get_inputs()[0].name
             self._backend = 'onnxruntime'

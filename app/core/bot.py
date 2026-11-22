@@ -281,6 +281,8 @@ class Bot:
             reason = 'result read interrupted' if interrupted else 'battle result'
             if ledger.finish(amounts, bonus=bonus, reason=reason):
                 self._emit_loot_update()
+            import gc
+            gc.collect()
             if interrupted:
                 raise InterruptedError('Bot stopped by user')
     def _refresh_home_resources(self, max_age_s=0.0):
