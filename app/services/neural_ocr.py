@@ -98,7 +98,7 @@ class _NeuralEngine:
         bordered = cv2.copyMakeBorder(roi_bgr, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
         bh, bw = bordered.shape[:2]
         max_dim = max(bh, bw)
-        if bh < 380 and bw < 1100:
+        if max_dim < 960:
             scale = 2.0
         elif max_dim > 1920:
             scale = 1920.0 / float(max_dim)
@@ -112,7 +112,7 @@ class _NeuralEngine:
         tw = max(32, (sw + 31) & ~31)
         th = max(32, (sh + 31) & ~31)
         canvas = np.zeros((th, tw, 3), dtype=np.float32)
-        arr = scaled.astype(np.float32) / 255.0
+        arr = cv2.cvtColor(scaled, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         arr[:, :, 0] = (arr[:, :, 0] - 0.485) / 0.229
         arr[:, :, 1] = (arr[:, :, 1] - 0.456) / 0.224
         arr[:, :, 2] = (arr[:, :, 2] - 0.406) / 0.225

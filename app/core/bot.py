@@ -788,6 +788,9 @@ deselect, which would eat the upcoming Attack click.'''
                         min_top = top_word.top
                         line_tol = max(8, int(round(top_word.height * 0.6)))
                         top_line = [w for w in n_words if abs(w.top - min_top) <= line_tol]
+                        mean_conf = sum(float(getattr(w, 'confidence', 0.0)) for w in top_line) / float(len(top_line))
+                        if mean_conf < 85.0:
+                            return None
                         tokens = [w.text.strip() for w in sorted(top_line, key=lambda b: b.left) if w.text and w.text.strip()]
                         while len(tokens) > 1 and tokens[0].isdigit() and len(tokens[0]) <= 3:
                             tokens.pop(0)
@@ -918,6 +921,17 @@ deselect, which would eat the upcoming Attack click.'''
         if not name:
             return
         prev = getattr(self, '_loot_account', None)
+        win = getattr(self, 'window', None)
+        if name != prev and win is not None:
+            # Corroborate with a second frame ~0.2s later so a transient popup/cloud frame never locks a misread
+            stop_ev = getattr(self, 'stop_event', None)
+            if stop_ev is not None and stop_ev.wait(0.2):
+                return
+            frame2 = win.screenshot()
+            if frame2 is not None and getattr(frame2, 'size', 0):
+                name2 = self._read_home_account_name(frame2)
+                if name2 != name:
+                    return
         self._loot_account = name
         self._home_account_read_ts = now
         if name != prev:

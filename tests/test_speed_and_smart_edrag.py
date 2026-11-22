@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.4.1')
-        self.assertEqual(format_window_title('', '1.4.1'), 'BaseLooter v1.4.1')
-        self.assertEqual(format_window_title('Main', '1.4.1'), 'BaseLooter v1.4.1 — Main')
+        self.assertEqual(__version__, '1.4.2')
+        self.assertEqual(format_window_title('', '1.4.2'), 'BaseLooter v1.4.2')
+        self.assertEqual(format_window_title('Main', '1.4.2'), 'BaseLooter v1.4.2 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -591,6 +591,30 @@ class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
                 white_text=True,
             )
             self.assertTrue(any('available' in w.text.lower() for w in words), f'Got words: {words}')
+
+    def test_update_home_account_name_requires_two_matching_frames(self):
+        bot = Bot.__new__(Bot)
+        bot.stop_event = threading.Event()
+        bot.window = MagicMock()
+        dummy = np.zeros((900, 1600, 3), dtype=np.uint8)
+        bot.window.screenshot.return_value = dummy
+        bot._state_callback = MagicMock()
+
+        # First call sees transient 'Boup' then 'Soup' -> must NOT lock 'Boup'
+        with (
+            patch.object(bot, '_is_chest_tap_screen', return_value=False),
+            patch.object(bot, '_read_home_account_name', side_effect=['Boup', 'Soup']),
+        ):
+            bot._update_home_account_name(dummy)
+        self.assertIsNone(getattr(bot, '_loot_account', None))
+
+        # Second call sees 'Soup' twice -> locks 'Soup'
+        with (
+            patch.object(bot, '_is_chest_tap_screen', return_value=False),
+            patch.object(bot, '_read_home_account_name', side_effect=['Soup', 'Soup']),
+        ):
+            bot._update_home_account_name(dummy)
+        self.assertEqual(bot._loot_account, 'Soup')
 
 
 if __name__ == '__main__':
