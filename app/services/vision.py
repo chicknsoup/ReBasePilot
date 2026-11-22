@@ -87,7 +87,7 @@ try:
         _MULTISCALE_WALL_TEMPLATES = frozenset({'upgrademore.png', 'multiupgrade.png'})
         _WALL_TEMPLATE_SCALE_FACTORS = (1.0, 0.90, 0.85)
         _MULTISCALE_CHEST_TEMPLATES = frozenset({'chestcontinue.png', 'chestclaim.png'})
-        _CHEST_TEMPLATE_SCALE_FACTORS = (1.0, 1.08, 1.12, 1.16, 0.92)
+        _CHEST_TEMPLATE_SCALE_FACTORS = (1.0, 1.12, 0.92)
         _active_ui_scale: float = 1.0
         _ui_scale_calibrated_size: Optional[Tuple[int, int]] = None
         _ocr_engine: str = 'tesseract'
@@ -130,6 +130,7 @@ try:
             'try_again.png',
             'reload.png',
             'okay.png',
+            'chest_tap.png',
         })
         @staticmethod
         def _resize_template_for_screen(template, screen_img):

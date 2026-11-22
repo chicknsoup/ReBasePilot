@@ -45,6 +45,7 @@ def main():
             import ctypes as _ct
             _k32 = _ct.windll.kernel32
             _k32.GetCurrentProcess.restype = _ct.c_void_p
+            _k32.SetPriorityClass.argtypes = [_ct.c_void_p, _ct.c_uint32]
             # BELOW_NORMAL_PRIORITY_CLASS (0x4000) keeps desktop/browser/emulator completely smooth
             _k32.SetPriorityClass(_k32.GetCurrentProcess(), 0x00004000)
         except Exception:

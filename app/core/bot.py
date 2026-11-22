@@ -2566,6 +2566,7 @@ deselect, which would eat the upcoming Attack click.'''
         zero_loot_streak = 0
         prev_damage_crop = None
         fast_forward_clicked = False
+        poll_idx = 0
 
         while time.monotonic() - start < _BATTLE_WAIT_MAX_SECONDS:
             self._check_stop()
@@ -2580,23 +2581,25 @@ deselect, which would eat the upcoming Attack click.'''
                 return None
             if frame is not None and getattr(frame, 'size', 0) > 0:
                 self._update_config_size(frame)
-                if self._battle_rewards.handle(frame):
-                    continue
-                rkind, rlx, rly = self._find_reload_button(frame)
-                if rlx:
-                    logger.warning('Battle wait: reload dialog (%s) detected — clicking RELOAD', rkind)
-                    self.input.click(rlx, rly, pause = 1.0)
-                    self._wait_for_village_after_reload()
-                    return None
-                bot_roi = VisionService.bottom_half_region(frame)
-                returnhome_tpls = ('returnhome.png', 'returnhome2.png') if self.config.aspect_key == ASPECT_16_10 else ('returnhome.png',)
-                for tpl in returnhome_tpls:
-                    rx, _ = self.vision.find_template(frame, tpl, region = bot_roi)
-                    if rx:
+                if poll_idx % 2 == 0:
+                    if self._battle_rewards.handle(frame):
+                        continue
+                    rkind, rlx, rly = self._find_reload_button(frame)
+                    if rlx:
+                        logger.warning('Battle wait: reload dialog (%s) detected — clicking RELOAD', rkind)
+                        self.input.click(rlx, rly, pause = 1.0)
+                        self._wait_for_village_after_reload()
                         return None
-                cx, _ = self.vision.find_template(frame, 'chestclaim.png', region = bot_roi)
-                if cx or self._is_chest_tap_screen(frame):
-                    return None
+                    fh, fw = frame.shape[:2]
+                    end_btn_roi = (int(fw * 0.28), int(fh * 0.68), int(fw * 0.44), int(fh * 0.30))
+                    returnhome_tpls = ('returnhome.png', 'returnhome2.png') if self.config.aspect_key == ASPECT_16_10 else ('returnhome.png',)
+                    for tpl in returnhome_tpls:
+                        rx, _ = self.vision.find_template(frame, tpl, region = end_btn_roi)
+                        if rx:
+                            return None
+                    cx, _ = self.vision.find_template(frame, 'chestclaim.png', region = end_btn_roi)
+                    if cx or self._is_chest_tap_screen(frame):
+                        return None
 
                 now = time.monotonic()
                 cur_loot = read_battle_remaining_loot(frame)
@@ -2661,7 +2664,8 @@ deselect, which would eat the upcoming Attack click.'''
                         self.input.click(sx, sy, pause=0.15, rand=False)
                         fast_forward_clicked = True
 
-            if self.stop_event.wait(1.0):
+            poll_idx += 1
+            if self.stop_event.wait(1.5):
                 self._check_stop()
                 return None
         self._end_battle_now()
