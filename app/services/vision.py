@@ -105,6 +105,14 @@ try:
             'returnhome.png',
             'returnhome2.png',
         })
+        _FAST_LOCKED_SCALE_TEMPLATES = frozenset({
+            'endbattle.png',
+            'surrender.png',
+            'nextbase.png',
+            'farmbattle.png',
+            'rankedbattle.png',
+            'attack2.png',
+        })
         @staticmethod
         def _resize_template_for_screen(template, screen_img):
             '''Resize reference PNG templates to match the current capture and UI DPI scale.'''
@@ -135,10 +143,13 @@ try:
                 # End-of-battle Return Home button scales independently (often ~0.90x on 240-DPI MuMu)
                 # and must NOT overwrite the global Home/Battle _active_ui_scale (1.22x).
                 primary_factors = (0.90, 1.0) if active > 1.05 else (1.0, 0.90)
-            elif template_name == 'attack.png' and abs(active - 1.0) > 0.01:
+            elif template_name in VisionService._FAST_LOCKED_SCALE_TEMPLATES:
+                primary_factors = (active,)
+            elif abs(active - 1.0) > 0.01:
+                # Keep (active, 1.0) for popups/controls (e.g. panel_x.png, okay.png) that may render at 1.0x
                 primary_factors = (active, 1.0)
             else:
-                primary_factors = (active,)
+                primary_factors = (1.0,)
 
             need_calibration = VisionService._ui_scale_calibrated_size != (w_scr, h_scr)
             # Fast path once DPI scale is calibrated for this capture size: skip redundant matchTemplate inside _best_scaled_template
