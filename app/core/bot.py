@@ -2485,14 +2485,43 @@ deselect, which would eat the upcoming Attack click.'''
         green = cv2.inRange(hsv, (40, 130, 140), (80, 255, 255))
         return int((green > 0).sum()) >= max(30, int(round(fw * 0.025)))
 
+    def _click_confirm_okay(self, timeout=2.5):
+        """Click the green 'Okay' button on an End Battle / Surrender confirmation modal.
+
+        Tries ``okay.png`` (threshold=0.72) inside the center modal region first, then falls back
+        to OCR ``find_ui_label(..., ('Okay', 'OK'))`` so uncalibrated DPI or slight tint changes
+        never leave the surrender confirmation dialog stuck until battle timeout.
+        """
+        deadline = time.time() + max(0.5, float(timeout))
+        attempt = 0
+        while time.time() < deadline:
+            self._check_stop()
+            frame = self.window.screenshot()
+            if frame is None or not getattr(frame, 'size', 0):
+                if self.stop_event.wait(0.2):
+                    self._check_stop()
+                continue
+            self._update_config_size(frame)
+            fh, fw = frame.shape[:2]
+            center_roi = (int(fw * 0.25), int(fh * 0.30), int(fw * 0.50), int(fh * 0.50))
+            ox, oy = self.vision.find_template(frame, 'okay.png', threshold=0.72, region=center_roi)
+            if not ox and attempt >= 1:
+                ox, oy = find_ui_label(frame, self.vision, ('Okay', 'OK'), region=center_roi, min_confidence=50)
+            if ox:
+                self.input.click(ox, oy, pause=0.3, rand=False)
+                return True
+            attempt += 1
+            if self.stop_event.wait(0.3):
+                self._check_stop()
+                return False
+        return False
+
     def _end_battle_now(self):
         """Click End Battle / Surrender and confirm Okay if prompted."""
         (bx, by) = self._wait_for_any_image(('endbattle.png', 'surrender.png'), timeout=5, error=False)
         if bx:
             self.input.click(bx, by, pause=0.35, rand=False)
-            ox, oy = self._find_template_once('okay.png')
-            if ox:
-                self.input.click(ox, oy, pause=0.3, rand=False)
+            self._click_confirm_okay(timeout=2.0)
 
     def _wait_for_battle_end(self, is_sneaky):
         if is_sneaky:
@@ -2892,9 +2921,7 @@ deselect, which would eat the upcoming Attack click.'''
             if sx:
                 logger.info('Recovery: live battle — surrendering to get home')
                 self.input.click(sx, sy, pause=0.3)
-                ox, oy = self._wait_for_image('okay.png', timeout=2, error=False)
-                if ox:
-                    self.input.click(ox, oy, pause=0.3)
+                self._click_confirm_okay(timeout=2.5)
                 if self.stop_event.wait(0.5):
                     self._check_stop()
                     return
@@ -2924,9 +2951,7 @@ deselect, which would eat the upcoming Attack click.'''
                 if sx:
                     logger.info('Recovery: live battle — surrendering to get home')
                     self.input.click(sx, sy, pause=0.3)
-                    ox, oy = self._wait_for_image('okay.png', timeout=2, error=False)
-                    if ox:
-                        self.input.click(ox, oy, pause=0.3)
+                    self._click_confirm_okay(timeout=2.5)
                     if self.stop_event.wait(0.5):
                         return
                     else:

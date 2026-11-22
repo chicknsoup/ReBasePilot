@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.4.5')
-        self.assertEqual(format_window_title('', '1.4.5'), 'BaseLooter v1.4.5')
-        self.assertEqual(format_window_title('Main', '1.4.5'), 'BaseLooter v1.4.5 — Main')
+        self.assertEqual(__version__, '1.4.6')
+        self.assertEqual(format_window_title('', '1.4.6'), 'BaseLooter v1.4.6')
+        self.assertEqual(format_window_title('Main', '1.4.6'), 'BaseLooter v1.4.6 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -639,6 +639,22 @@ class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
         finally:
             VisionService._active_ui_scale = prev_scale
             VisionService._ui_scale_calibrated_size = prev_size
+
+    def test_click_confirm_okay_falls_back_to_ocr_when_template_misses(self):
+        bot = Bot.__new__(Bot)
+        bot.stop_event = threading.Event()
+        bot.window = MagicMock()
+        bot.window.screenshot.return_value = np.zeros((900, 1600, 3), dtype=np.uint8)
+        bot.input = MagicMock()
+        bot.vision = MagicMock()
+        bot.vision.find_template.return_value = (None, None)
+        bot._update_config_size = MagicMock()
+
+        with patch('app.core.bot.find_ui_label', return_value=(920, 560)) as mock_ocr:
+            ok = bot._click_confirm_okay(timeout=1.5)
+        self.assertTrue(ok)
+        mock_ocr.assert_called_once()
+        bot.input.click.assert_called_once_with(920, 560, pause=0.3, rand=False)
 
 
 if __name__ == '__main__':
