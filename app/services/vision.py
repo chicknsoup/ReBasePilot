@@ -134,14 +134,15 @@ try:
             elif template_name in VisionService._LOCAL_MULTISCALE_TEMPLATES:
                 # End-of-battle Return Home button scales independently (often ~0.90x on 240-DPI MuMu)
                 # and must NOT overwrite the global Home/Battle _active_ui_scale (1.22x).
-                primary_factors = tuple(dict.fromkeys((1.0, 0.90, active, 1.15)))
-            elif abs(active - 1.0) > 0.01:
+                primary_factors = (0.90, 1.0) if active > 1.05 else (1.0, 0.90)
+            elif template_name == 'attack.png' and abs(active - 1.0) > 0.01:
                 primary_factors = (active, 1.0)
             else:
-                primary_factors = (1.0,)
+                primary_factors = (active,)
 
             need_calibration = VisionService._ui_scale_calibrated_size != (w_scr, h_scr)
-            if not need_calibration and len(primary_factors) == 1 and abs(sx - sy) <= 0.01 and template_name not in VisionService._UI_SCALE_ANCHOR_TEMPLATES:
+            # Fast path once DPI scale is calibrated for this capture size: skip redundant matchTemplate inside _best_scaled_template
+            if not need_calibration and len(primary_factors) == 1 and abs(sx - sy) <= 0.01:
                 return VisionService._resize_template_for_screen(template, screen_img)
 
             def _eval_factors(factor_seq):
@@ -175,7 +176,7 @@ try:
                     VisionService._ui_scale_calibrated_size = (w_scr, h_scr)
                 return best_tpl
 
-            if (need_calibration and template_name not in VisionService._LOCAL_MULTISCALE_TEMPLATES) or template_name in VisionService._UI_SCALE_ANCHOR_TEMPLATES:
+            if need_calibration and template_name not in VisionService._LOCAL_MULTISCALE_TEMPLATES:
                 extra = [f for f in VisionService._UI_DPI_SCALE_CANDIDATES if all(abs(f - pf) > 0.01 for pf in primary_factors)]
                 if extra:
                     (cand_tpl, cand_score, cand_factor) = _eval_factors(extra)

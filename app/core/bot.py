@@ -888,6 +888,8 @@ deselect, which would eat the upcoming Attack click.'''
             frame = win.screenshot()
         if frame is None or not getattr(frame, 'size', 0):
             return
+        if self._is_chest_tap_screen(frame):
+            return
         name = self._read_home_account_name(frame)
         if not name:
             return
@@ -1999,6 +2001,15 @@ deselect, which would eat the upcoming Attack click.'''
                 frame_retry = self.window.screenshot()
                 if frame_retry is not None and getattr(frame_retry, 'size', 0) > 0:
                     self._update_config_size(frame_retry)
+                    if self._is_chest_tap_screen(frame_retry):
+                        logger.info('Attack open: chest Tap! screen visible — running chest open flow')
+                        self._tap_empty_until_chest_continue()
+                        return 'no_attack'
+                    ctx, cty = self._find_chest_continue_button(frame_retry)
+                    if ctx:
+                        logger.info('Attack open: chest Continue button visible at (%d, %d) — clicking', int(ctx), int(cty))
+                        self.input.click(ctx, cty, pause=0.4)
+                        return 'no_attack'
                     self._dismiss_okay_or_exit_on_frame(frame_retry)
                     rkind, rlx, rly = self._find_reload_button(frame_retry)
                     if rlx:

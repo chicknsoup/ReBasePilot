@@ -1,2 +1,2 @@
 """BaseLooter — Clash of Clans farming and base-progression autopilot."""
-__version__ = '1.3.0'
+__version__ = '1.3.1'
