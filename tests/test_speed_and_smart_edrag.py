@@ -46,9 +46,9 @@ class TestWindowTitleVersion(unittest.TestCase):
     def test_version_and_title_formatting(self):
         from app.ui.qt.main_window import format_window_title
 
-        self.assertEqual(__version__, '1.4.9')
-        self.assertEqual(format_window_title('', '1.4.9'), 'BaseLooter v1.4.9')
-        self.assertEqual(format_window_title('Main', '1.4.9'), 'BaseLooter v1.4.9 — Main')
+        self.assertEqual(__version__, '1.4.10')
+        self.assertEqual(format_window_title('', '1.4.10'), 'BaseLooter v1.4.10')
+        self.assertEqual(format_window_title('Main', '1.4.10'), 'BaseLooter v1.4.10 — Main')
 
 
 class TestFastEnemyLootAndSpeed(unittest.TestCase):
@@ -666,6 +666,40 @@ class TestNeuralOcrAndEngineSwitch(unittest.TestCase):
         self.assertTrue(NeuralOcrService.unload_if_idle(idle_seconds=0.0))
         self.assertFalse(NeuralOcrService.unload_if_idle(idle_seconds=0.0))
         self.assertTrue(NeuralOcrService.is_available())
+
+    def test_record_raid_result_waits_for_league_bonus_to_corroborate(self):
+        from app.core.loot_tracker import LootLedger
+
+        bot = Bot.__new__(Bot)
+        bot.stop_event = threading.Event()
+        bot.window = MagicMock()
+        dummy = np.zeros((900, 1600, 3), dtype=np.uint8)
+        bot.window.screenshot.return_value = dummy
+        bot.vision = MagicMock()
+        bot._builder_base = False
+        bot._emit_loot_update = MagicMock()
+        bot._loot_ledger = LootLedger()
+        bot._loot_ledger.begin()
+
+        # Main loot corroborates on attempt 1, while League Bonus animates top-to-bottom:
+        # attempt 0: only Gold bonus; attempt 1: Gold+Elixir; attempt 2 & 3: all 3 settled
+        main_reads = [(1_000_000, 900_000, 5_000)] * 4
+        bonus_reads = [
+            (200_000, None, None),
+            (200_000, 200_000, None),
+            (200_000, 200_000, 1_500),
+            (200_000, 200_000, 1_500),
+        ]
+        with (
+            patch('app.core.bot.read_raid_result', side_effect=main_reads),
+            patch('app.core.bot.read_raid_bonus', side_effect=bonus_reads),
+            patch.object(bot.stop_event, 'wait', return_value=False),
+        ):
+            bot._record_raid_result(dummy)
+
+        self.assertEqual(bot._loot_ledger.complete, 1)
+        self.assertEqual(bot._loot_ledger.missing, [0, 0, 0])
+        self.assertEqual(bot._loot_ledger.totals, [1_200_000, 1_100_000, 6_500])
 
 
 if __name__ == '__main__':

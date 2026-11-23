@@ -236,7 +236,7 @@ class Bot:
             frame = first_frame
             interrupted = False
             debug_dumped = False
-            for attempt in range(4):
+            for attempt in range(6):
                 if self.stop_event.is_set():
                     interrupted = True
                     break
@@ -267,7 +267,10 @@ class Bot:
                     bonus_reads.append(bonus_read)
                     amounts = corroborate_results(reads)
                     bonus = corroborate_results(bonus_reads)
-                    if all((value is not None for value in amounts)):
+                    bonus_ready = all((value is not None for value in bonus)) or (
+                        attempt >= 2 and all((b is None for b in bonus_reads))
+                    )
+                    if all((value is not None for value in amounts)) and bonus_ready:
                         break
             if all((value is not None for value in amounts)) and bonus == UNKNOWN:
                 bonus = (0, 0, 0)

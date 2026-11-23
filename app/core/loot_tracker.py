@@ -71,6 +71,20 @@ def _read_amount(crop, limit, vision):
         pass
     votes = []
     aliases = str.maketrans({'O': '0', 'I': '1', 'l': '1', 'S': '5', 'B': '8'})
+    if VisionService.get_ocr_engine() == 'neural':
+        try:
+            from app.services.neural_ocr import NeuralOcrService
+            if NeuralOcrService.is_available():
+                ch, cw = crop.shape[:2]
+                n_words = NeuralOcrService.recognize_line(crop, (0, 0, cw, ch), dark_bg=True) or []
+                if n_words and all(math.isfinite(float(w.confidence)) for w in n_words):
+                    ntext = ''.join(w.text.strip().replace(',', '') for w in sorted(n_words, key=lambda w: w.left))
+                    if re.fullmatch('[+]?[0-9OIlSB]+', ntext):
+                        nval = int(ntext.lstrip('+').translate(aliases))
+                        if 0 <= nval <= limit:
+                            return nval
+        except Exception:
+            pass
     for floor, scale in ((225, 1), (205, 2)):
         big = crop if scale == 1 else cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
